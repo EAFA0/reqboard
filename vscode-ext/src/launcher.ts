@@ -53,10 +53,10 @@ export const LAUNCHER_ACTIONS: LauncherActionMeta[] = [
   {
     id: 'plan_dag',
     label: '规划 / 校准 DAG',
-    desc: '结合现有代码库与 PRD 建图或校准 stale 节点',
+    desc: '结合代码库与 PRD 建图、校准 stale 节点，并按门禁同步已实现节点的 done 状态',
     scope: 'workspace',
     defaultPrompt:
-      '请结合当前 .reqboard/prd.md、补充来源与现有代码库，按 ReqBoard 规范规划或校准 DAG（反碎化、无伪硬边、区分 todo 与真实外部依赖、处理 stale 节点），先跑 Critic 自审后再导入并汇报。',
+      '请结合当前 .reqboard/prd.md、补充来源与现有代码库，按 ReqBoard 规范规划或校准 DAG（反碎化、无伪硬边、区分 todo 与真实外部依赖、核对 stale 节点）；若已有实现代码，顺便按真实代码与 bindings 核验每个节点并同步状态：通过 4 道门禁则执行 reqboard done，仍受外部/mock/todo/人工批注阻塞则标记 implemented 并列明缺口，先跑 Critic 自审后再汇报。',
   },
   {
     id: 'node_work',
@@ -72,7 +72,7 @@ export const LAUNCHER_ACTIONS: LauncherActionMeta[] = [
     desc: '读取该节点的未解决 Review 批注并逐条修复',
     scope: 'node',
     defaultPrompt:
-      '请执行 reqboard claim {nodeId} 查看该节点的未解决 Review 批注与绑定符号，严格按批注逐条修复代码与单测，更新 bind 并跑 reqboard check --node {nodeId} 后回报结果。',
+      '请执行 reqboard claim {nodeId} 查看该节点的未解决 Review 批注与绑定符号，严格按批注逐条修复代码与单测，更新 bind 并跑 reqboard check --node {nodeId}；人类批注禁止自审关闭，修复后执行 reqboard node update {nodeId} --status implemented 释放租约并回报等我点 Reviewed 通过。',
   },
 ];
 

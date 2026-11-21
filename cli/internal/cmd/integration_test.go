@@ -867,3 +867,33 @@ func TestTodoRejectsUnknownOrNonMineBlocks(t *testing.T) {
 		t.Fatalf("out_of_scope blocks target not rejected: %s", errOut)
 	}
 }
+
+func TestHumanReviewNoteRequiresHumanPass(t *testing.T) {
+	f := setupCLI(t)
+	mustCLI(t, f.root, "node", "review", "rb-a", "--request-changes", "--note", "缺少幂等校验", "--actor", "human")
+
+	// Agent must not self-approve a human-authored review note.
+	_, errOut, code := cli(t, f.root, "node", "review", "rb-a", "--pass")
+	if code == 0 || !strings.Contains(errOut, "只能由人类审核通过") {
+		t.Fatalf("agent should be blocked from passing human review note: code=%d err=%s", code, errOut)
+	}
+	dag, _ := f.store.LoadDAG()
+	if dag.Node("rb-a").Status != model.StatusChangesRequested || len(dag.Node("rb-a").OpenNotes()) != 1 {
+		t.Fatalf("human note should remain open: %+v", dag.Node("rb-a"))
+	}
+
+	// Human can pass and resolve the open note.
+	mustCLI(t, f.root, "node", "review", "rb-a", "--pass", "--actor", "human")
+	dag, _ = f.store.LoadDAG()
+	if dag.Node("rb-a").Status != model.StatusReviewed || len(dag.Node("rb-a").OpenNotes()) != 0 {
+		t.Fatalf("human pass failed: %+v", dag.Node("rb-a"))
+	}
+
+	// Non-human review notes (e.g., independent critic agent) can still be passed by agent.
+	mustCLI(t, f.root, "node", "review", "rb-a", "--request-changes", "--note", "自动巡检建议补边界单测", "--actor", "agent")
+	mustCLI(t, f.root, "node", "review", "rb-a", "--pass", "--actor", "agent")
+	dag, _ = f.store.LoadDAG()
+	if dag.Node("rb-a").Status != model.StatusReviewed || len(dag.Node("rb-a").OpenNotes()) != 0 {
+		t.Fatalf("agent pass on agent-authored note failed: %+v", dag.Node("rb-a"))
+	}
+}

@@ -523,6 +523,26 @@ func nodeReview(a *Args, id string) *Error {
 			}
 			n.Status = model.StatusChangesRequested
 		} else {
+			if ctx.Actor != "human" {
+				var humanNotes []string
+				for _, r := range n.ReviewNotes {
+					if r.Status == "open" && r.Author == "human" {
+						humanNotes = append(humanNotes, r.ID)
+					}
+				}
+				if len(humanNotes) > 0 {
+					ids := strings.Join(humanNotes, ", ")
+					return &Error{
+						Code: 1,
+						Msg:  "human review note requires human pass",
+						Text: fmt.Sprintf(
+							"[REQBOARD BLOCKED] 节点 %s 存在人类写下的未闭环 Review 批注（%s），只能由人类审核通过，禁止 Agent 自审放行。\n  -> Agent 修复后请执行 `reqboard node update %s --status implemented` 释放租约并回报，由人类在看板点「Reviewed 通过」或执行 `reqboard node review %s --pass --actor human`。\n",
+							id, ids, id, id,
+						),
+						Data: map[string]interface{}{"ok": false, "node_id": id, "human_open_notes": humanNotes},
+					}
+				}
+			}
 			for i := range n.ReviewNotes {
 				if n.ReviewNotes[i].Status == "open" {
 					n.ReviewNotes[i].Status = "resolved"

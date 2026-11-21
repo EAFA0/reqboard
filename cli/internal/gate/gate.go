@@ -104,10 +104,14 @@ func Evaluate(dag *model.DAG, bindings *model.Bindings, rep *audit.Report, nodeI
 		})
 	}
 	for _, note := range n.OpenNotes() {
+		correction := fmt.Sprintf("修复后由 Review 人执行 `reqboard node review %s --pass`（自动关闭批注）", nodeID)
+		if note.Author == "human" {
+			correction = fmt.Sprintf("修复后保留为 implemented，由人类在看板点「Reviewed 通过」或执行 `reqboard node review %s --pass --actor human`（禁止 Agent 自审关闭人类批注）", nodeID)
+		}
 		out = append(out, Violation{
 			Gate: 3, Code: "open_review_note",
 			Message:    fmt.Sprintf("存在未闭环 Review 批注 %s：%s", note.ID, note.Comment),
-			Correction: fmt.Sprintf("修复后由 Review 人执行 `reqboard node review %s --pass`（自动关闭批注）", nodeID),
+			Correction: correction,
 		})
 	}
 

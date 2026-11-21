@@ -2723,7 +2723,7 @@
     { id: 'push_goal', label: '推进完整任务', desc: '按 reqboard dispatch 持续推进当前可执行节点直至闭环' },
     { id: 'review_simplify', label: 'Review 与代码精简', desc: '对照 PRD、红线、bindings 与 mock 债做代码审查和精简' },
     { id: 'audit_orphan', label: '审计 Orphan / 残骸 Diff', desc: '按 reqboard check --json 逐条分类未归属改动，先汇报后动手' },
-    { id: 'plan_dag', label: '规划 / 校准 DAG', desc: '结合现有代码库与 PRD 建图或校准 stale 节点' },
+    { id: 'plan_dag', label: '规划 / 校准 DAG', desc: '结合代码库与 PRD 建图、校准 stale 节点并同步已实现节点的 done 状态' },
   ];
 
   function openAgentMenu(anchorEl) {
