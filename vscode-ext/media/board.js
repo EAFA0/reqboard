@@ -25,10 +25,12 @@
     anchorLinkedNodes: [],
     anchorBarClosed: false,
     diffSearch: '',
+    activeSource: 'p',
+    pendingSource: null,
+    sourceScroll: {},
   };
   let justDragged = false;
   let toastTimer = null;
-  let prdScroll = 0;
 
   const $ = (id) => document.getElementById(id);
 
@@ -62,6 +64,25 @@
 
   function allEdges() {
     return (state.snap && state.snap.dag && state.snap.dag.edges) || [];
+  }
+
+  function allSources() {
+    return (state.snap && Array.isArray(state.snap.sources)) ? state.snap.sources : [];
+  }
+
+  function sourceMeta(id) {
+    return allSources().find((s) => s.id === id) || null;
+  }
+
+  function sourcePrefix(anchor) {
+    const s = String(anchor || '');
+    const i = s.indexOf(':');
+    return i > 0 ? s.slice(0, i) : '';
+  }
+
+  function isSourceAnchor(anchor) {
+    const prefix = sourcePrefix(anchor);
+    return prefix !== '' && prefix !== 'p';
   }
 
   function isPrerequisiteNode(n) {
@@ -462,6 +483,10 @@
     $('orch-state').textContent = isRunning ? 'Running' : 'Quiescent';
     $('orch-session').textContent = orch.session_id ? `session ${String(orch.session_id).slice(0, 10)}…` : 'no session';
     let stats = `${done}/${nodes.length} done · ${running} running · ${stale} stale`;
+    const srcCount = allSources().length;
+    if (srcCount) {
+      stats += ` · ${srcCount} sources`;
+    }
     const dp = snap.dispatch || {};
     if (dp.status === 'QUIESCENT') {
       const b = dp.blocked || {};
@@ -507,19 +532,71 @@
     }).join('');
   }
 
+  function renderSourceTabs() {
+    const el = $('source-tabs');
+    if (!el) {
+      return;
+    }
+    const tabs = [];
+    tabs.push(`<button class="source-tab ${state.activeSource === 'p' ? 'active' : ''}" data-source-tab="p" title="主 PRD（强制覆盖考核）">主 PRD</button>`);
+    for (const s of allSources()) {
+      const refN = (s.blocks || []).filter((b) => b.kind !== 'heading' && (b.node_ids || []).length).length;
+      const count = refN ? `<span class="tab-count" title="被节点引用的段数">${refN}</span>` : '';
+      tabs.push(`<button class="source-tab ${state.activeSource === s.id ? 'active' : ''}" data-source-tab="${esc(s.id)}" title="${esc(s.title)}${s.url ? ' · ' + esc(s.url) : ''}">${esc(s.title)}${count}</button>`);
+    }
+    tabs.push('<button class="source-tab source-add" data-source-add title="添加补充来源：粘贴会议纪要/群聊拍板，或选择本地 Markdown">+ 添加来源</button>');
+    el.innerHTML = tabs.join('');
+  }
+
   function renderPRD() {
     const list = $('prd-list');
-    const blocks = (state.snap.prd && state.snap.prd.blocks) || [];
+    if (!list) {
+      return;
+    }
+    const tabKey = state.activeSource;
+    let isMain = state.activeSource === 'p';
+    let meta = isMain ? null : sourceMeta(state.activeSource);
+    if (!isMain && !meta) {
+      state.activeSource = 'p';
+      isMain = true;
+      meta = null;
+    }
+    state.sourceScroll[tabKey] = list.scrollTop;
+    const blocks = isMain ? ((state.snap.prd && state.snap.prd.blocks) || []) : ((meta && meta.blocks) || []);
     const cov = (state.snap.prd && state.snap.prd.coverage) || {};
-    $('coverage-badge').textContent = `覆盖 ${Number(cov.percent || 0).toFixed(0)}% · Unmapped ${cov.unmapped || 0}`;
-    prdScroll = list.scrollTop;
+    const badge = $('coverage-badge');
+    if (badge) {
+      if (isMain) {
+        badge.textContent = `覆盖 ${Number(cov.percent || 0).toFixed(0)}% · Unmapped ${cov.unmapped || 0}`;
+        badge.title = '主 PRD 是强制覆盖考核；补充来源不参与 Unmapped 统计';
+      } else {
+        const body = blocks.filter((b) => b.kind !== 'heading');
+        const refN = body.filter((b) => (b.node_ids || []).length).length;
+        badge.textContent = `引用 ${refN}/${body.length} 段`;
+        badge.title = '补充来源仅标记被节点引用的段落，未引用段落保持安静灰条';
+      }
+    }
     const parts = [];
     for (const b of blocks) {
-      const cls = ['prd-block', 'kind-' + b.kind, coverageClass(b.coverage)];
+      const nodeIds = b.node_ids || [];
+      let cls;
+      let actions;
+      if (isMain) {
+        cls = ['prd-block', 'kind-' + b.kind, coverageClass(b.coverage)];
+        actions = `<div class="prd-actions">
+        <button data-act="create" title="新建节点并锚定此段">+ 建节点</button>
+        <button data-act="ignore" title="标为背景忽略 / 恢复">${b.coverage === 'ignored' ? '恢复' : '忽略'}</button>
+      </div>`;
+      } else {
+        cls = ['prd-block', 'source-block', 'kind-' + b.kind, nodeIds.length ? 'source-referenced' : 'source-quiet'];
+        actions = `<div class="prd-actions">
+        <button data-act="create" title="新建节点并锚定此段">+ 建节点</button>
+        <button data-act="attach" title="把该锚点追加到当前选中节点的 prd_refs">+ 挂到当前节点</button>
+      </div>`;
+      }
       if (b.anchor === state.selectedAnchor) {
         cls.push('selected');
       }
-      const nodeIds = b.node_ids || [];
       let inner;
       if (b.kind === 'heading') {
         inner = `<div class="prd-heading lvl${b.level || 1}">${inlineMD(stripHashes(b.text))}</div>`;
@@ -530,16 +607,18 @@
       } else {
         inner = `<div>${inlineMD(b.text)}</div>`;
       }
-      const actions = `<div class="prd-actions">
-        <button data-act="create" title="新建节点并锚定此段">+ 建节点</button>
-        <button data-act="ignore" title="标为背景忽略 / 恢复">${b.coverage === 'ignored' ? '恢复' : '忽略'}</button>
-      </div>`;
-      parts.push(`<div class="${cls.join(' ')}" data-anchor="${esc(b.anchor)}" data-cov="${esc(b.coverage)}" data-nodes="${esc(nodeIds.join(','))}">
-        ${inner}${actions}<span class="prd-anchor">@${esc(b.anchor)}</span>
+      const refBadge = !isMain && nodeIds.length
+        ? `<span class="source-ref-badge" title="引用节点：${esc(nodeIds.join(', '))}">${nodeIds.length} 节点</span>`
+        : '';
+      parts.push(`<div class="${cls.join(' ')}" data-anchor="${esc(b.anchor)}" data-cov="${esc(b.coverage || '')}" data-source="${esc(isMain ? 'p' : state.activeSource)}" data-nodes="${esc(nodeIds.join(','))}">
+        ${inner}${actions}${refBadge}<span class="prd-anchor">@${esc(b.anchor)}</span>
       </div>`);
     }
-    list.innerHTML = parts.join('') || '<div class="empty">prd.md 为空；先运行 reqboard prd init。</div>';
-    list.scrollTop = prdScroll;
+    const emptyText = isMain
+      ? 'prd.md 为空；先运行 reqboard prd init。'
+      : `补充来源「${esc(meta ? meta.title : '')}」为空；点「+ 添加来源」导入会议纪要或群聊拍板。`;
+    list.innerHTML = parts.join('') || `<div class="empty">${emptyText}</div>`;
+    list.scrollTop = state.sourceScroll[state.activeSource] || 0;
   }
 
   function highlightPRD() {
@@ -572,9 +651,27 @@
     return links;
   }
 
+  function ensureAnchorTab(anchor) {
+    const prefix = sourcePrefix(anchor);
+    if (prefix === '' || prefix === 'p') {
+      if (state.activeSource !== 'p') {
+        state.activeSource = 'p';
+        renderSourceTabs();
+        renderPRD();
+      }
+      return;
+    }
+    if (sourceMeta(prefix) && state.activeSource !== prefix) {
+      state.activeSource = prefix;
+      renderSourceTabs();
+      renderPRD();
+    }
+  }
+
   function selectAnchor(anchor, centerDAG) {
     state.selectedAnchor = anchor;
     state.anchorBarClosed = false;
+    ensureAnchorTab(anchor);
     const block = document.querySelector(`.prd-block[data-anchor="${selEsc(anchor)}"]`);
     const links = anchorLinksFor(anchor);
     state.anchorLinkedNodes = links.all.slice();
@@ -737,6 +834,22 @@
     showToast('已创建节点并锚定 ' + anchor, 'info');
   }
 
+  function attachAnchorToSelected(anchor) {
+    const sel = findNode(state.selectedNode);
+    if (!sel) {
+      showToast('先在画布选中一个节点，再挂载补充来源锚点', 'error');
+      return;
+    }
+    const refs = (sel.prd_refs || []).slice();
+    if (refs.indexOf(anchor) >= 0) {
+      showToast(`节点 ${sel.id} 已挂载 @${anchor}`, 'info');
+      return;
+    }
+    refs.push(anchor);
+    post({ type: 'node.update', id: sel.id, patch: { prd_refs: refs } });
+    showToast(`已把 @${anchor} 挂到 ${sel.id}`, 'info');
+  }
+
   /* ---------------- DAG ---------------- */
 
   function renderSVG() {
@@ -825,9 +938,17 @@
     if (n.stale) { badges.push(`<span class="chip stale" title="${esc(n.stale_reason || '')}">stale</span>`); }
     if (mockDebt > 0) { badges.push(`<span class="chip mock" title="Mock 债">mock ${mockDebt}</span>`); }
     if (n.hold) { badges.push('<span class="chip hold">hold</span>'); }
+    const sourceAnchors = (n.prd_refs || []).filter(isSourceAnchor);
+    const refTotal = ((n.refs || []).length) + sourceAnchors.length;
+    if (refTotal > 0) {
+      badges.push(`<span class="chip ref" title="外部依据 ${(n.refs || []).length} 条 · 补充来源锚点 ${sourceAnchors.length} 个">ref ${refTotal}</span>`);
+    }
     const extEdges = isMainNode(n) ? prerequisiteInEdges(n.id) : [];
     const extPills = extEdges.length
       ? `<div class="node-ext-pills">${extEdges.map(extPillHTML).join('')}</div>`
+      : '';
+    const sourceChips = sourceAnchors.length
+      ? `<div class="node-source-anchors">${sourceAnchors.slice(0, 3).map((r) => `<button class="node-anchor-chip" data-anchor-chip="${esc(r)}" title="定位补充来源段落：@${esc(r)}">@${esc(r)}</button>`).join('')}${sourceAnchors.length > 3 ? `<span class="node-anchor-more">+${sourceAnchors.length - 3}</span>` : ''}</div>`
       : '';
     const session = n.session_id
       ? `<a class="node-session" data-session="${esc(n.session_id)}" title="打开 Orchestrator session">thread</a>`
@@ -850,6 +971,7 @@
       <div class="node-title" title="${esc(n.title)}">${esc(n.title)}</div>
       <div class="node-badges">${badges.join('')}</div>
       ${extPills}
+      ${sourceChips}
       <div class="node-meta">
         <span>${esc(scopeLabel(n.scope))}</span>
         <span><span class="diffstat"><span class="add">+${st.added || 0}</span> <span class="del">-${st.deleted || 0}</span></span> ${session}</span>
@@ -920,6 +1042,7 @@
     }
     if (o.syncPRD !== false && n.prd_refs && n.prd_refs.length) {
       state.selectedAnchor = n.prd_refs[0];
+      ensureAnchorTab(state.selectedAnchor);
     }
     const cards = document.querySelectorAll('.dag-node');
     for (const el of cards) {
@@ -1449,6 +1572,45 @@
     return html;
   }
 
+  function refKindLabel(kind) {
+    return ({
+      url: '链接',
+      meeting: '会议',
+      decision: '拍板',
+      chat: '群聊',
+    })[kind] || kind || '依据';
+  }
+
+  function refsSectionHTML(n) {
+    const refs = (n && Array.isArray(n.refs)) ? n.refs : [];
+    let html = `<div class="section-title">外部依据 / 拍板摘录 (${refs.length})</div>`;
+    if (!refs.length) {
+      html += '<div class="empty">暂无外部依据；可添加会议链接或拍板原话。</div>';
+    }
+    for (const r of refs) {
+      html += `<div class="ref-row" data-ref-row="${esc(r.id)}">
+        <span class="ref-kind kind-${esc(r.kind)}">${esc(refKindLabel(r.kind))}</span>
+        <span class="ref-title" title="${esc(r.title)}">${esc(r.title)}</span>
+        ${r.url ? `<a class="ref-url" href="${esc(r.url)}" data-ref-url="${esc(r.url)}" title="${esc(r.url)}">打开链接</a>` : ''}
+        <button class="ref-remove" data-ref-remove="${esc(r.id)}" title="删除该依据">×</button>
+        ${r.quote ? `<div class="ref-quote">“${esc(r.quote)}”</div>` : ''}
+      </div>`;
+    }
+    html += `<div class="ref-add">
+      <select id="ref-kind-select" title="依据类型">
+        <option value="decision">拍板</option>
+        <option value="meeting">会议</option>
+        <option value="chat">群聊</option>
+        <option value="url">链接</option>
+      </select>
+      <input id="ref-title-input" placeholder="标题（必填）">
+      <input id="ref-url-input" placeholder="可选 URL（http(s) 链接）">
+      <input id="ref-quote-input" placeholder="可选原话摘录">
+      <button data-ref-add="${esc(n ? n.id : '')}" title="添加依据">+ 添加依据</button>
+    </div>`;
+    return html;
+  }
+
   function renderRight() {
     const body = $('diff-body');
     const snap = state.snap;
@@ -1488,6 +1650,7 @@
     if (selected.description) {
       html += `<div class="why">${esc(selected.description)}</div>`;
     }
+    html += refsSectionHTML(selected);
     const hiddenHint = hiddenTests ? `，已隐藏 ${hiddenTests} 个单测` : '';
     html += `<div class="section-title">挂载符号 (${bindings.length}${hiddenHint})</div>`;
     if (!bindings.length) {
@@ -1673,6 +1836,26 @@
       <label>status</label><select id="ne-status">${statuses.map((s) => `<option value="${s}" ${n.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select>
       <label>tags（逗号分隔）</label><input id="ne-tags" value="${esc((n.tags || []).join(', '))}">
       <label>PRD refs（逗号分隔）</label><input id="ne-refs" value="${esc((n.prd_refs || []).join(', '))}">
+      <label>外部依据 / 拍板摘录</label>
+      <div class="editor-refs">${(n.refs || []).map((r) => `<div class="ref-row">
+        <span class="ref-kind kind-${esc(r.kind)}">${esc(refKindLabel(r.kind))}</span>
+        <span class="ref-title">${esc(r.title)}</span>
+        ${r.url ? `<a class="ref-url" href="${esc(r.url)}" data-ref-url="${esc(r.url)}">链接</a>` : ''}
+        <button class="ref-remove" data-editor-ref-remove="${esc(r.id)}" title="删除该依据">×</button>
+        ${r.quote ? `<div class="ref-quote">“${esc(r.quote)}”</div>` : ''}
+      </div>`).join('') || '<div class="empty">暂无外部依据</div>'}</div>
+      <div class="ref-add compact">
+        <select id="ne-ref-kind" title="依据类型">
+          <option value="decision">拍板</option>
+          <option value="meeting">会议</option>
+          <option value="chat">群聊</option>
+          <option value="url">链接</option>
+        </select>
+        <input id="ne-ref-title" placeholder="依据标题（必填）">
+        <input id="ne-ref-url" placeholder="可选 URL">
+        <input id="ne-ref-quote" placeholder="可选原话摘录">
+        <button data-editor-ref-add title="添加依据">+</button>
+      </div>
       <label class="checkline"><input type="checkbox" id="ne-hold" ${n.hold ? 'checked' : ''}> hold 暂停自动推进</label>
       <label>Ops 清单（DDL / 网关 / Flag）</label>
       <div class="editor-ops">${nodeOps(n).map((op) => `<div class="op-row ${op.done ? 'done' : ''}">
@@ -1737,6 +1920,41 @@
       closePopup();
       requestDeleteNode(n.id);
     };
+    for (const btn of div.querySelectorAll('[data-editor-ref-remove]')) {
+      btn.onclick = () => {
+        post({ type: 'ref.remove', nodeId: n.id, refId: btn.dataset.editorRefRemove });
+        closePopup();
+      };
+    }
+    for (const a of div.querySelectorAll('[data-ref-url]')) {
+      a.onclick = (ev) => {
+        ev.preventDefault();
+        post({ type: 'open.external', url: a.dataset.refUrl });
+      };
+    }
+    const refAddBtn = div.querySelector('[data-editor-ref-add]');
+    if (refAddBtn) {
+      refAddBtn.onclick = () => {
+        const titleEl = div.querySelector('#ne-ref-title');
+        const title = titleEl ? titleEl.value.trim() : '';
+        if (!title) {
+          showToast('请填写依据标题', 'error');
+          if (titleEl) { titleEl.focus(); }
+          return;
+        }
+        const urlEl = div.querySelector('#ne-ref-url');
+        const quoteEl = div.querySelector('#ne-ref-quote');
+        post({
+          type: 'ref.add',
+          nodeId: n.id,
+          kind: selectValue(div.querySelector('#ne-ref-kind'), 'decision'),
+          title,
+          url: urlEl ? urlEl.value.trim() : '',
+          quote: quoteEl ? quoteEl.value.trim() : '',
+        });
+        closePopup();
+      };
+    }
     for (const btn of div.querySelectorAll('[data-editor-op-toggle]')) {
       btn.onclick = () => {
         post({ type: 'ops.toggle', nodeId: n.id, opId: btn.dataset.editorOpToggle });
@@ -1796,7 +2014,96 @@
     state.popup = div;
   }
 
+  function openSourceAdd(rect) {
+    closePopup();
+    const div = document.createElement('div');
+    div.className = 'popup source-add-popup';
+    div.innerHTML = `<button class="close" data-close>×</button>
+      <h4>添加补充来源</h4>
+      <label>标题</label><input id="src-title" placeholder="如 评审会议补充口径">
+      <label>类型</label><select id="src-kind">
+        <option value="meeting">会议纪要</option>
+        <option value="chat">群聊拍板</option>
+        <option value="doc">文档</option>
+        <option value="spec">规格</option>
+      </select>
+      <label>可选 URL</label><input id="src-url" placeholder="http(s) 链接">
+      <label>直接粘贴文本（会议纪要 / 群聊拍板）</label>
+      <textarea id="src-text" placeholder="粘贴一段原文，保存为 .reqboard/sources/&lt;id&gt;.md"></textarea>
+      <div class="row"><button data-cancel>取消</button><button class="primary" data-save>保存为补充来源</button></div>
+      <div class="row"><button data-pick title="通过 VS Code 原生文件选择器导入">从本地选择 Markdown 文件</button></div>`;
+    $('popup-layer').appendChild(div);
+    positionPopup(div, rect ? rect.left : window.innerWidth / 2 - 170, rect ? rect.bottom + 6 : 140);
+    const submit = () => {
+      const titleEl = div.querySelector('#src-title');
+      const textEl = div.querySelector('#src-text');
+      const title = titleEl ? titleEl.value.trim() : '';
+      const text = textEl ? textEl.value : '';
+      if (!title) {
+        showToast('请填写补充来源标题', 'error');
+        if (titleEl) { titleEl.focus(); }
+        return;
+      }
+      if (!text.trim()) {
+        showToast('请粘贴会议纪要/群聊拍板，或改用「从本地选择 Markdown 文件」', 'error');
+        if (textEl) { textEl.focus(); }
+        return;
+      }
+      const urlEl = div.querySelector('#src-url');
+      const url = urlEl ? urlEl.value.trim() : '';
+      if (url && !/^https?:\/\//i.test(url)) {
+        showToast('URL 只接受 http(s) 链接', 'error');
+        return;
+      }
+      post({
+        type: 'source.add',
+        title,
+        kind: selectValue(div.querySelector('#src-kind'), 'meeting'),
+        url,
+        text,
+      });
+      closePopup();
+      showToast('正在保存补充来源…', 'info');
+    };
+    div.querySelector('[data-close]').onclick = closePopup;
+    div.querySelector('[data-cancel]').onclick = closePopup;
+    div.querySelector('[data-save]').onclick = submit;
+    div.querySelector('[data-pick]').onclick = () => {
+      post({ type: 'source.pick' });
+      closePopup();
+    };
+    const textEl = div.querySelector('#src-text');
+    if (textEl) {
+      textEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          submit();
+        }
+      });
+    }
+    state.popup = div;
+  }
+
   /* ---------------- events ---------------- */
+
+  const sourceTabsEl = $('source-tabs');
+  if (sourceTabsEl) {
+    sourceTabsEl.addEventListener('click', (e) => {
+      const add = e.target.closest('[data-source-add]');
+      if (add) {
+        openSourceAdd(add.getBoundingClientRect());
+        return;
+      }
+      const tab = e.target.closest('[data-source-tab]');
+      if (!tab) {
+        return;
+      }
+      state.activeSource = tab.dataset.sourceTab;
+      state.selectedAnchor = null;
+      renderSourceTabs();
+      renderPRD();
+    });
+  }
 
   $('prd-list').addEventListener('click', (e) => {
     const link = e.target.closest('a.prd-link');
@@ -1817,6 +2124,8 @@
       e.stopPropagation();
       if (btn.dataset.act === 'create') {
         createNodeFromBlock(block.dataset.anchor, block);
+      } else if (btn.dataset.act === 'attach') {
+        attachAnchorToSelected(block.dataset.anchor);
       } else {
         post({
           type: 'prd.ignore',
@@ -1899,6 +2208,12 @@
   });
 
   $('dag-nodes').addEventListener('click', (e) => {
+    const anchorChip = e.target.closest('[data-anchor-chip]');
+    if (anchorChip) {
+      e.stopPropagation();
+      selectAnchor(anchorChip.dataset.anchorChip, true);
+      return;
+    }
     const pill = e.target.closest('[data-ext-edge]');
     if (pill) {
       e.stopPropagation();
@@ -2044,6 +2359,42 @@
   });
 
   $('diff-body').addEventListener('click', (e) => {
+    const refUrl = e.target.closest('[data-ref-url]');
+    if (refUrl) {
+      e.preventDefault();
+      post({ type: 'open.external', url: refUrl.dataset.refUrl });
+      return;
+    }
+    const refRemove = e.target.closest('[data-ref-remove]');
+    if (refRemove) {
+      if (!state.selectedNode) {
+        return;
+      }
+      post({ type: 'ref.remove', nodeId: state.selectedNode, refId: refRemove.dataset.refRemove });
+      return;
+    }
+    const refAdd = e.target.closest('[data-ref-add]');
+    if (refAdd) {
+      const titleEl = $('ref-title-input');
+      const title = titleEl ? titleEl.value.trim() : '';
+      if (!title) {
+        showToast('请填写依据标题', 'error');
+        if (titleEl) { titleEl.focus(); }
+        return;
+      }
+      const kindEl = $('ref-kind-select');
+      const urlEl = $('ref-url-input');
+      const quoteEl = $('ref-quote-input');
+      post({
+        type: 'ref.add',
+        nodeId: refAdd.dataset.refAdd,
+        kind: selectValue(kindEl, 'decision'),
+        title,
+        url: urlEl ? urlEl.value.trim() : '',
+        quote: quoteEl ? quoteEl.value.trim() : '',
+      });
+      return;
+    }
     const opToggle = e.target.closest('[data-op-toggle]');
     if (opToggle) {
       post({ type: 'ops.toggle', nodeId: opToggle.dataset.opNode, opId: opToggle.dataset.opToggle });
@@ -2329,7 +2680,18 @@
         state.hoverExternal = null;
       }
       state.anchorLinkedNodes = (state.anchorLinkedNodes || []).filter((id) => !!findNode(id));
+      if (state.pendingSource) {
+        if (allSources().some((s) => s.id === state.pendingSource)) {
+          state.activeSource = state.pendingSource;
+        }
+        state.pendingSource = null;
+      }
+      if (state.activeSource !== 'p' && !sourceMeta(state.activeSource)) {
+        state.activeSource = 'p';
+      }
       render();
+    } else if (msg.type === 'source.added') {
+      state.pendingSource = String(msg.id || '');
     } else if (msg.type === 'toast') {
       showToast(msg.message, 'info');
     } else if (msg.type === 'error') {
@@ -2343,6 +2705,7 @@
     }
     syncFilterControls();
     renderTop();
+    renderSourceTabs();
     renderPRD();
     renderDAG();
     renderDock();

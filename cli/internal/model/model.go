@@ -65,6 +65,40 @@ const (
 	OpOther   = "other"
 )
 
+// Supplemental source kinds.
+const (
+	SourceDoc     = "doc"
+	SourceMeeting = "meeting"
+	SourceChat    = "chat"
+	SourceSpec    = "spec"
+)
+
+// Node-level external reference kinds.
+const (
+	RefURL      = "url"
+	RefMeeting  = "meeting"
+	RefDecision = "decision"
+	RefChat     = "chat"
+)
+
+// ValidSourceKind reports whether s is a known supplemental source kind.
+func ValidSourceKind(s string) bool {
+	switch s {
+	case SourceDoc, SourceMeeting, SourceChat, SourceSpec:
+		return true
+	}
+	return false
+}
+
+// ValidRefKind reports whether s is a known external reference kind.
+func ValidRefKind(s string) bool {
+	switch s {
+	case RefURL, RefMeeting, RefDecision, RefChat:
+		return true
+	}
+	return false
+}
+
 // DefaultIgnoreGlobs keeps generated code out of the diff noise.
 var DefaultIgnoreGlobs = []string{
 	"**/*_mock.go",
@@ -164,28 +198,53 @@ type OpItem struct {
 	Note  string `json:"note,omitempty"`
 }
 
+// Source is one supplemental requirement source (meeting notes, chat decision,
+// spec). The markdown body lives at .reqboard/sources/<id>.md and its anchors
+// use the <id>:... prefix.
+type Source struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Kind      string `json:"kind"` // doc | meeting | chat | spec
+	File      string `json:"file"` // sources/<id>.md
+	URL       string `json:"url,omitempty"`
+	AddedAt   string `json:"added_at"`
+	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
+// ExternalRef is a node-level lightweight reference / decision excerpt. It is
+// deliberately small: title + optional URL + optional verbatim quote.
+type ExternalRef struct {
+	ID      string `json:"id"`
+	Kind    string `json:"kind"` // url | meeting | decision | chat
+	Title   string `json:"title"`
+	URL     string `json:"url,omitempty"`
+	Quote   string `json:"quote,omitempty"`
+	AddedAt string `json:"added_at"`
+}
+
 // Node is one business function / rule in the DAG.
 type Node struct {
-	ID           string       `json:"id"`
-	Title        string       `json:"title"`
-	Description  string       `json:"description,omitempty"`
-	Scope        string       `json:"scope"`
-	Status       string       `json:"status"`
-	Stale        bool         `json:"stale"`
-	StaleReason  string       `json:"stale_reason,omitempty"`
-	PRDRefs      []string     `json:"prd_refs"`
-	Tags         []string     `json:"tags,omitempty"`
-	SelfMocks    []SelfMock   `json:"self_mocks"`
-	ReviewNotes  []ReviewNote `json:"review_notes"`
-	Ops          []OpItem     `json:"ops,omitempty"`
-	Evidence     Evidence     `json:"evidence"`
-	SessionID    string       `json:"session_id,omitempty"`
-	Hold         bool         `json:"hold"`
-	Attempts     int          `json:"attempts"`
-	LastError    string       `json:"last_error,omitempty"`
-	HumanVersion int          `json:"human_version"`
-	Position     Position     `json:"position"`
-	UpdatedAt    string       `json:"updated_at"`
+	ID           string        `json:"id"`
+	Title        string        `json:"title"`
+	Description  string        `json:"description,omitempty"`
+	Scope        string        `json:"scope"`
+	Status       string        `json:"status"`
+	Stale        bool          `json:"stale"`
+	StaleReason  string        `json:"stale_reason,omitempty"`
+	PRDRefs      []string      `json:"prd_refs"`
+	Refs         []ExternalRef `json:"refs,omitempty"`
+	Tags         []string      `json:"tags,omitempty"`
+	SelfMocks    []SelfMock    `json:"self_mocks"`
+	ReviewNotes  []ReviewNote  `json:"review_notes"`
+	Ops          []OpItem      `json:"ops,omitempty"`
+	Evidence     Evidence      `json:"evidence"`
+	SessionID    string        `json:"session_id,omitempty"`
+	Hold         bool          `json:"hold"`
+	Attempts     int           `json:"attempts"`
+	LastError    string        `json:"last_error,omitempty"`
+	HumanVersion int           `json:"human_version"`
+	Position     Position      `json:"position"`
+	UpdatedAt    string        `json:"updated_at"`
 }
 
 // Edge is a dependency / contract between nodes.
@@ -214,6 +273,7 @@ type DAG struct {
 	RequirementName string       `json:"requirement_name"`
 	Nodes           []*Node      `json:"nodes"`
 	Edges           []*Edge      `json:"edges"`
+	Sources         []Source     `json:"sources,omitempty"`
 	IgnoredPRDRefs  []string     `json:"ignored_prd_refs"`
 	Orchestrator    Orchestrator `json:"orchestrator"`
 }
@@ -411,6 +471,38 @@ func (d *DAG) Node(id string) *Node {
 	for _, n := range d.Nodes {
 		if n.ID == id {
 			return n
+		}
+	}
+	return nil
+}
+
+// Source returns a supplemental source by id or nil.
+func (d *DAG) Source(id string) *Source {
+	for i := range d.Sources {
+		if d.Sources[i].ID == id {
+			return &d.Sources[i]
+		}
+	}
+	return nil
+}
+
+// SourceIDSet returns the set of registered supplemental source ids.
+func (d *DAG) SourceIDSet() map[string]bool {
+	m := make(map[string]bool, len(d.Sources))
+	for _, s := range d.Sources {
+		m[s.ID] = true
+	}
+	return m
+}
+
+// Ref returns a node-level external reference by id or nil.
+func (n *Node) Ref(id string) *ExternalRef {
+	if n == nil {
+		return nil
+	}
+	for i := range n.Refs {
+		if n.Refs[i].ID == id {
+			return &n.Refs[i]
 		}
 	}
 	return nil

@@ -3,6 +3,7 @@
 面向多仓复杂需求与多 coding agent session 并发的本地需求控制面：
 
 - **功能/规则级 DAG**：先锚定 PRD 功能点，再挂载代码；技术方案变了只标 `stale`，骨架不散。
+- **多需求来源**：主 PRD 之外可登记补充来源（会议纪要 / 群聊拍板 / 规格），各有独立锚点命名空间（如 `meeting-review:1-3`）；节点还可挂轻量 `refs`（外链 / 会议 / 拍板摘录）。补充来源不参与主 PRD 覆盖率考核，`claim` 会自动注入并标注「与主 PRD 口径冲突时优先采用」。
 - **双向孤儿拦截**：左栏 `Unmapped PRD`，右栏 `Orphan Diff` / `To-Delete` / `Broken Binding`。
 - **Diff 降噪开箱即用**：默认排除单测与生成代码，支持 Include / Exclude glob 白名单；CLI 与 VS Code 右栏共用同一份 `config.json` 过滤配置。
 - **不卡开工，只卡完结**：`done` 四道硬门禁（前置完结 / 零 Mock 债 / 非陈旧且无批注 / 代码干净）；`external|collaborator --hard--> mine` 先卡开工，`mocked` 边仍可带 Mock 并行；`todo --hard--> mine` 默认只卡完结，只有带 `block-start` tag 才卡开工。
@@ -21,14 +22,18 @@ cd cli && go build -o ../bin/reqboard . && cd ..
 ln -sf "$PWD/bin/reqboard" ~/.local/bin/reqboard
 
 # 2. 安装 VS Code 扩展
-code --install-extension vscode-ext/reqboard-vscode-0.2.1.vsix
+code --install-extension vscode-ext/reqboard-vscode-0.3.0.vsix
 
 # 3. 在下一个需求 worktree 初始化
 cd <requirement-worktree>
 reqboard init --name <需求名>            # 自动扫描 git 子仓；无子仓时进入规划模式
 reqboard repo add --name <n> --path <dir> --base <ref>  # 规划后按需挂载代码仓
 reqboard prd init <src.md>               # 注入 <!-- @p:... --> 稳定锚点
-reqboard plan import plan.json           # 功能级 DAG + PRD 覆盖率
+reqboard source add notes.md --id meeting-review --title "评审补充口径" --kind meeting
+                                         # 补充来源 -> .reqboard/sources/meeting-review.md（锚点 meeting-review:*）
+reqboard source add --text "群聊拍板原文" --id chat-review --kind chat   # 也可从 stdin: --file -
+reqboard ref add rb-a --title "评审拍板" --kind decision --url https://... --quote "原话摘录"
+reqboard plan import plan.json           # 功能级 DAG + PRD 覆盖率（prd_refs 可引用补充来源锚点）
 reqboard status                          # 看板快照
 reqboard filter show                     # 查看当前 Diff 过滤（默认排除单测）
 reqboard filter set --include 'src/**, *.go' --exclude 'vendor/**' --exclude-tests=true
@@ -58,7 +63,7 @@ reqboard dispatch --max-parallel 6
 reqboard done rb-precheck     # 4 道门禁拦截
 ```
 
-Demo 含 2 个真实 Go 仓库（`order_api` / `order_service`，各有 `master` 与 `feature/order-visibility`）、自然拓扑 DAG、`out_of_scope` 红线、`proposed` 待批节点、橙色 `mocked` 边、一条 `DDL: orders add confirmation_mode` 的 1→2 阻塞 TODO、`Orphan Diff`、`To-Delete` 残骸与 `Unmapped PRD`。
+Demo 含 2 个真实 Go 仓库（`order_api` / `order_service`，各有 `master` 与 `feature/order-visibility`）、自然拓扑 DAG、`out_of_scope` 红线、`proposed` 待批节点、橙色 `mocked` 边、一条 `DDL: orders add confirmation_mode` 的 1→2 阻塞 TODO、一份 `meeting-review` 补充来源（挂到 `rb-vis`）与节点级拍板 `ref`、`Orphan Diff`、`To-Delete` 残骸与 `Unmapped PRD`。`reqboard claim rb-vis` 可直接看到主 PRD + 补充依据 + 拍板摘录的完整注入。
 
 ## 目录
 

@@ -19,13 +19,30 @@ const (
 	KindCode      = "code"
 )
 
+// DefaultPrefix is the anchor prefix of the main prd.md.
+const DefaultPrefix = "p"
+
 var (
-	anchorRe      = regexp.MustCompile(`^<!--\s*@(p:[^\s>]+)\s*-->\s*$`)
+	anchorRe      = regexp.MustCompile(`^<!--\s*@([A-Za-z0-9_-]+:[^\s>]+)\s*-->\s*$`)
+	prefixRe      = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 	headingRe     = regexp.MustCompile(`^(#{1,6})\s+(.*\S)\s*$`)
 	numericHeadRe = regexp.MustCompile(`^(\d+(?:\.\d+)*)\.?(?:\s+|$)`)
 	listRe        = regexp.MustCompile(`^(\s*)([-*+]|\d+[.)])\s+(.*)$`)
 	fenceRe       = regexp.MustCompile("^\\s*(```|~~~)")
 )
+
+// ValidPrefix reports whether prefix is legal for an anchor namespace.
+func ValidPrefix(prefix string) bool {
+	return prefix != "" && prefixRe.MatchString(prefix)
+}
+
+// PrefixOf returns the namespace part of an anchor ("p" for p:3.1-2).
+func PrefixOf(anchor string) string {
+	if i := strings.Index(anchor, ":"); i > 0 {
+		return anchor[:i]
+	}
+	return ""
+}
 
 // Block is one anchored unit of the PRD: a heading, paragraph, list item,
 // table row or code fence.
@@ -84,9 +101,25 @@ type rawBlock struct {
 	oldAnchor  string
 }
 
-// Parse converts markdown source into blocks. Existing @p anchors are honoured
-// when present, otherwise new p:<section>-<ordinal> anchors are generated.
+// Parse converts markdown source into blocks. Existing anchors of any
+// namespace are honoured when present, otherwise new p:<section>-<ordinal>
+// anchors are generated.
 func Parse(src []byte) (*Document, error) {
+	return ParseWithPrefix(src, DefaultPrefix)
+}
+
+// InitWithPrefix parses raw markdown and generates anchors under prefix.
+func InitWithPrefix(raw []byte, prefix string) (*Document, error) {
+	return ParseWithPrefix(raw, prefix)
+}
+
+// ParseWithPrefix converts markdown source into blocks. Existing anchors of any
+// namespace are honoured when present; otherwise new <prefix>:<section>-<ordinal>
+// anchors are generated.
+func ParseWithPrefix(src []byte, prefix string) (*Document, error) {
+	if !ValidPrefix(prefix) {
+		return nil, fmt.Errorf("invalid anchor prefix %q (want [A-Za-z0-9_-]+)", prefix)
+	}
 	text := strings.ReplaceAll(string(src), "\r\n", "\n")
 	lines := strings.Split(text, "\n")
 	var raws []rawBlock
@@ -286,7 +319,7 @@ func Parse(src []byte) (*Document, error) {
 		ordinals[sectionKey] = ord
 		anchor := rb.oldAnchor
 		if anchor == "" || used[anchor] {
-			base := fmt.Sprintf("p:%s-%d", sectionKey, ord)
+			base := fmt.Sprintf("%s:%s-%d", prefix, sectionKey, ord)
 			anchor = base
 			for n := 2; used[anchor]; n++ {
 				anchor = fmt.Sprintf("%s.%d", base, n)
@@ -386,6 +419,21 @@ type SyncResult struct {
 // Sync aligns new raw markdown against the previous document, preserving
 // anchors for matched blocks and emitting modified/added/deleted blocks.
 func Sync(old *Document, newDoc *Document) *SyncResult {
+	return syncDocuments(old, newDoc, DefaultPrefix)
+}
+
+// SyncWithPrefix parses newRaw under prefix and aligns it against oldDoc. New
+// blocks that cannot be matched get <prefix>:... anchors, so a supplemental
+// source can be re-synced without ever colliding with the main p: namespace.
+func SyncWithPrefix(old *Document, newRaw []byte, prefix string) (*SyncResult, error) {
+	newDoc, err := ParseWithPrefix(newRaw, prefix)
+	if err != nil {
+		return nil, err
+	}
+	return syncDocuments(old, newDoc, prefix), nil
+}
+
+func syncDocuments(old *Document, newDoc *Document, prefix string) *SyncResult {
 	res := &SyncResult{Document: newDoc}
 	if old == nil {
 		for _, b := range newDoc.Blocks {
@@ -582,7 +630,7 @@ func Sync(old *Document, newDoc *Document) *SyncResult {
 		ord := ordinals[nb.SectionKey] + 1
 		ordinals[nb.SectionKey] = ord
 		if usedAnchors[nb.Anchor] {
-			base := fmt.Sprintf("p:%s-%d", nb.SectionKey, ord)
+			base := fmt.Sprintf("%s:%s-%d", prefix, nb.SectionKey, ord)
 			anchor := base
 			for n := 2; usedAnchors[anchor]; n++ {
 				anchor = fmt.Sprintf("%s.%d", base, n)

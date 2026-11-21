@@ -45,8 +45,8 @@ export function renderHTML(webview: vscode.Webview, extensionUri: vscode.Uri): s
 </header>
 <main id="columns">
   <section id="prd-pane" class="pane">
-    <div class="pane-head">
-      <span>PRD 原文</span>
+    <div class="pane-head prd-head">
+      <div id="source-tabs" class="source-tabs"></div>
       <span id="coverage-badge" class="badge"></span>
     </div>
     <div id="prd-list" class="pane-body"></div>

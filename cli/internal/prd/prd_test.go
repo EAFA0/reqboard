@@ -167,3 +167,58 @@ func TestParseListContinuation(t *testing.T) {
 		t.Fatalf("list continuation lost: %+v", doc.Blocks[1])
 	}
 }
+
+func TestInitWithPrefixGeneratesNamespaceAnchors(t *testing.T) {
+	md := "## 1 评审\n\n- 先按补充口径实现。\n- 保留原文。\n"
+	doc, err := InitWithPrefix([]byte(md), "meeting-review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"meeting-review:1-1", "meeting-review:1-2", "meeting-review:1-3"}
+	if got := doc.Anchors(); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("anchors = %v, want %v", got, want)
+	}
+	// The generic parser must round-trip any namespace losslessly.
+	again, err := Parse(doc.Render())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(again.Anchors(), ",") != strings.Join(want, ",") {
+		t.Fatalf("round-trip anchors = %v", again.Anchors())
+	}
+	if again.Blocks[0].Text != doc.Blocks[0].Text {
+		t.Fatalf("round-trip text changed: %q", again.Blocks[0].Text)
+	}
+}
+
+func TestSyncWithPrefixKeepsNamespaceOnModifiedAndAdded(t *testing.T) {
+	oldDoc, err := InitWithPrefix([]byte("## 1 评审\n\n- 先按补充口径实现。\n- 保留。\n"), "mt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRaw := []byte("## 1 评审\n\n- 先按补充口径实现（含退款）。\n- 保留。\n- 新增。\n")
+	res, err := SyncWithPrefix(oldDoc, newRaw, "mt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Modified) != 1 || len(res.Added) != 1 {
+		t.Fatalf("modified=%d added=%d", len(res.Modified), len(res.Added))
+	}
+	if res.Modified[0].New.Anchor != res.Modified[0].Old.Anchor {
+		t.Fatalf("modified anchor changed: %s -> %s", res.Modified[0].Old.Anchor, res.Modified[0].New.Anchor)
+	}
+	for _, b := range res.Document.Blocks {
+		if !strings.HasPrefix(b.Anchor, "mt:") {
+			t.Fatalf("anchor %q escaped the mt namespace", b.Anchor)
+		}
+	}
+	if strings.Contains(res.Added[0].Anchor, "p:") {
+		t.Fatalf("added block reused the main p namespace: %s", res.Added[0].Anchor)
+	}
+}
+
+func TestParseWithPrefixRejectsInvalidPrefix(t *testing.T) {
+	if _, err := ParseWithPrefix([]byte("x"), "bad prefix"); err == nil {
+		t.Fatal("invalid prefix not rejected")
+	}
+}

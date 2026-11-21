@@ -51,6 +51,21 @@ cp "$ROOT/fixtures/bindings.json" "$ROOT/.reqboard/bindings.json"
 # and one-click Done unlocking.
 "$RB" todo add "DDL: orders add confirmation_mode" --root "$ROOT" --kind ddl \
   --blocks rb-vis,rb-query --note "上线前执行；阻塞可见性/查询两条链路完结" --actor human >/dev/null
+
+# Supplemental requirement source: review meeting notes with its own
+# `meeting-review:` anchor namespace. One paragraph is attached to rb-vis, and
+# the node also carries a decision excerpt ref with a demo link.
+"$RB" source add "$ROOT/fixtures/meeting-review.md" --root "$ROOT" --id meeting-review \
+  --title "评审补充口径" --kind meeting \
+  --url "https://example.com/reqboard-demo/review" >/dev/null
+"$RB" node update rb-vis --root "$ROOT" \
+  --prd-ref p:3.1.1-2 --prd-ref p:3.1.1-3 --prd-ref p:3.1.1-4 \
+  --prd-ref meeting-review:1-3 --actor human >/dev/null
+"$RB" ref add rb-vis --root "$ROOT" \
+  --title "评审拍板：线下单支付成功后可见" --kind decision \
+  --url "https://example.com/reqboard-demo/decision" \
+  --quote "线下签约单支付成功后立即可见，不再等待其他状态。" --actor human >/dev/null
+
 "$RB" layout --root "$ROOT" >/dev/null
 
 echo "[demo] sandbox ready: $ROOT"

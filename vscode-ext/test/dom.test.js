@@ -29,8 +29,11 @@ const BODY = `<!DOCTYPE html><html><body>
   <button id="btn-goal"></button>
   <button id="btn-orch"></button>
 </header>
+<div class="pane-head prd-head">
+  <div id="source-tabs"></div>
+  <span id="coverage-badge" class="badge"></span>
+</div>
 <div id="prd-list"></div>
-<div id="coverage-badge"></div>
 <div id="dag-pane">
   <button id="btn-add-node"></button>
   <div id="external-dock">
@@ -128,6 +131,19 @@ const snapshot = {
     ],
     coverage: { percent: 100, unmapped: 0 },
   },
+  sources: [
+    {
+      id: 'meeting-review',
+      title: '评审补充口径',
+      kind: 'meeting',
+      url: 'https://example.com/review',
+      blocks: [
+        { anchor: 'meeting-review:h1-1', kind: 'heading', level: 1, text: '# 评审补充', node_ids: [] },
+        { anchor: 'meeting-review:1-1', kind: 'paragraph', text: '线下单在支付成功后即可见。', node_ids: ['rb-a'] },
+        { anchor: 'meeting-review:1-2', kind: 'paragraph', text: '其余口径不变。', node_ids: [] },
+      ],
+    },
+  ],
   bindings: [],
   leases: [],
   filter: { exclude_tests: true, include_globs: [], ignore_globs: ['**/*_mock.go', '**/*_gen.go'] },
@@ -138,6 +154,12 @@ const snapshot = {
   dag: {
     nodes: [
       Object.assign(node('rb-a', '下单', 'mine', 'pending', 80, 440), {
+        prd_refs: ['meeting-review:1-1'],
+        refs: [{
+          id: 'rf-01', kind: 'decision', title: '评审拍板',
+          url: 'https://example.com/decision', quote: '先按补充口径实现',
+          added_at: '2026-11-21T10:00:00+08:00',
+        }],
         ops: [op('op-01', 'ddl', '新增可见性索引', false, '上线前执行'), op('op-02', 'flag', '订单可见性开关', true)],
       }),
       node('rb-b', '待批节点', 'mine', 'proposed', 400, 440),
@@ -627,6 +649,112 @@ test('full-graph mode lays prerequisite sources in column 0', () => {
   const back = messages.filter((m) => m.type === 'layout').pop();
   assert.strictEqual(back.includeExternal, false);
   assert.strictEqual(document.querySelector('.dag-node[data-node="rb-a"]').style.left, '80px');
+});
+
+test('left pane renders main PRD plus supplemental source tabs', () => {
+  const { document, window } = boot();
+  const tabs = [...document.querySelectorAll('#source-tabs [data-source-tab]')];
+  assert.deepStrictEqual(tabs.map((t) => t.dataset.sourceTab), ['p', 'meeting-review']);
+  assert.ok(tabs[0].classList.contains('active'), 'main PRD tab should be active by default');
+  assert.ok(tabs[1].textContent.includes('评审补充口径'));
+  assert.ok(tabs[1].querySelector('.tab-count'), 'referenced block count badge missing');
+  assert.strictEqual(tabs[1].querySelector('.tab-count').textContent, '1');
+  assert.ok(document.querySelector('[data-source-add]'), 'add-source button missing');
+
+  click(window, tabs[1]);
+  const active = document.querySelector('#source-tabs [data-source-tab="meeting-review"]');
+  assert.ok(active.classList.contains('active'));
+  const blocks = [...document.querySelectorAll('#prd-list .prd-block')];
+  assert.strictEqual(blocks.length, 3);
+  const referenced = document.querySelector('.prd-block[data-anchor="meeting-review:1-1"]');
+  const quiet = document.querySelector('.prd-block[data-anchor="meeting-review:1-2"]');
+  assert.ok(referenced.classList.contains('source-referenced'), 'referenced source block not highlighted');
+  assert.ok(!referenced.classList.contains('cov-unmapped'), 'source block must never be marked Unmapped');
+  assert.ok(quiet.classList.contains('source-quiet'), 'unreferenced source block should stay quiet');
+  assert.ok(referenced.textContent.includes('1 节点'));
+  assert.ok(document.getElementById('coverage-badge').textContent.includes('引用 1/2'));
+
+  click(window, document.querySelector('#source-tabs [data-source-tab="p"]'));
+  assert.ok(document.querySelector('.prd-block[data-anchor="p-main"]'), 'main PRD blocks not restored');
+});
+
+test('pasting meeting notes creates a supplemental source', () => {
+  const { document, window, messages } = boot();
+  click(window, document.querySelector('[data-source-add]'));
+  const popup = document.querySelector('.source-add-popup');
+  assert.ok(popup, 'source add popup missing');
+  popup.querySelector('#src-title').value = '群聊拍板';
+  popup.querySelector('#src-kind').selectedIndex = 1;
+  popup.querySelector('#src-url').value = 'https://example.com/chat';
+  popup.querySelector('#src-text').value = '# 群聊拍板\n\n- 先做可见性。';
+  click(window, popup.querySelector('[data-save]'));
+  const msg = messages.filter((m) => m.type === 'source.add').pop();
+  assert.ok(msg, 'source.add message missing');
+  assert.strictEqual(msg.title, '群聊拍板');
+  assert.strictEqual(msg.kind, 'chat');
+  assert.strictEqual(msg.url, 'https://example.com/chat');
+  assert.ok(msg.text.includes('先做可见性'));
+  assert.ok(!document.querySelector('.source-add-popup'), 'popup should close after save');
+});
+
+test('source block can attach its anchor to the selected node', () => {
+  const { document, window, messages } = boot();
+  click(window, document.querySelector('.prd-block[data-anchor="p-main"]'));
+  click(window, document.querySelector('#source-tabs [data-source-tab="meeting-review"]'));
+  const block = document.querySelector('.prd-block[data-anchor="meeting-review:1-2"]');
+  assert.ok(block, 'source block missing');
+  click(window, block.querySelector('[data-act="attach"]'));
+  const msg = messages.filter((m) => m.type === 'node.update').pop();
+  assert.ok(msg, 'node.update message missing');
+  assert.strictEqual(msg.id, 'rb-a');
+  assert.deepStrictEqual([...msg.patch.prd_refs], ['meeting-review:1-1', 'meeting-review:1-2']);
+});
+
+test('clicking a supplemental anchor on the canvas switches the left tab', () => {
+  const { document, window } = boot();
+  const chip = document.querySelector('.dag-node[data-node="rb-a"] [data-anchor-chip="meeting-review:1-1"]');
+  assert.ok(chip, 'node source anchor chip missing');
+  click(window, chip);
+  const tab = document.querySelector('#source-tabs [data-source-tab="meeting-review"]');
+  assert.ok(tab.classList.contains('active'), 'left pane did not switch to source tab');
+  const block = document.querySelector('.prd-block[data-anchor="meeting-review:1-1"]');
+  assert.ok(block.classList.contains('selected'), 'source block not highlighted');
+});
+
+test('node card shows a ref micro badge for refs and supplemental anchors', () => {
+  const { document } = boot();
+  const chip = document.querySelector('.dag-node[data-node="rb-a"] .chip.ref');
+  assert.ok(chip, 'ref micro badge missing');
+  assert.strictEqual(chip.textContent, 'ref 2');
+});
+
+test('right pane lists, adds and removes node refs', () => {
+  const { document, window, messages } = boot();
+  click(window, document.querySelector('.prd-block[data-anchor="p-main"]'));
+  const rows = [...document.querySelectorAll('#diff-body .ref-row')];
+  assert.strictEqual(rows.length, 1);
+  assert.ok(rows[0].textContent.includes('评审拍板'));
+  assert.ok(rows[0].textContent.includes('先按补充口径实现'));
+  assert.ok(rows[0].querySelector('[data-ref-url]'), 'ref URL link missing');
+
+  document.getElementById('ref-kind-select').selectedIndex = 1;
+  document.getElementById('ref-title-input').value = '评审会议纪要';
+  document.getElementById('ref-url-input').value = 'https://example.com/meeting';
+  document.getElementById('ref-quote-input').value = '确认可见性口径';
+  click(window, document.querySelector('[data-ref-add="rb-a"]'));
+  const add = messages.filter((m) => m.type === 'ref.add').pop();
+  assert.ok(add, 'ref.add message missing');
+  assert.strictEqual(add.nodeId, 'rb-a');
+  assert.strictEqual(add.kind, 'meeting');
+  assert.strictEqual(add.title, '评审会议纪要');
+  assert.strictEqual(add.url, 'https://example.com/meeting');
+  assert.strictEqual(add.quote, '确认可见性口径');
+
+  click(window, document.querySelector('#diff-body [data-ref-remove="rf-01"]'));
+  const remove = messages.filter((m) => m.type === 'ref.remove').pop();
+  assert.ok(remove, 'ref.remove message missing');
+  assert.strictEqual(remove.nodeId, 'rb-a');
+  assert.strictEqual(remove.refId, 'rf-01');
 });
 
 console.log('all webview DOM tests passed');

@@ -233,7 +233,7 @@ func Main(argv []string) int {
 		return 0
 	}
 	if argv[0] == "version" || argv[0] == "--version" {
-		fmt.Println("reqboard 0.2.1")
+		fmt.Println("reqboard 0.3.0")
 		return 0
 	}
 
@@ -250,6 +250,10 @@ func Main(argv []string) int {
 		err = runRepo(a, rest)
 	case "prd":
 		err = runPRD(a, rest)
+	case "source":
+		err = runSource(a, rest)
+	case "ref":
+		err = runRef(a, rest)
 	case "plan":
 		err = runPlan(a, rest)
 	case "node":
@@ -328,6 +332,11 @@ func usage() string {
   reqboard init [--root <dir>] [--name <name>] [--repo <name=path:base>...]
   reqboard repo list | repo add --name <n> --path <dir> [--base <ref>] | repo remove <name> [--force]
   reqboard prd init <src.md> | prd sync <new.md> | prd ignore <p:x> [<p:y>...] [--undo]
+  reqboard source add <file.md|-> --id <slug> [--title "..."] [--kind doc|meeting|chat|spec] [--url "https://..."]
+  reqboard source add --text "粘贴的会议纪要/群聊拍板" --id <slug> [--title "..."] [--kind ...]
+  reqboard source sync <id> <new_file.md> | source list [--json] | source remove <id> [--force]
+  reqboard ref add <node_id> --title "..." [--kind url|meeting|decision|chat] [--url "https://..."] [--quote "..."]
+  reqboard ref remove <node_id> <ref_id>
   reqboard plan import <plan.json> [--replace] [--no-layout] [--allow-unknown-refs]
   reqboard node add|update|deprecate|delete|approve|reject|review|fail ...
   reqboard edge add|update|remove ...

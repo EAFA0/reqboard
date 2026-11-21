@@ -22,15 +22,16 @@ type File struct {
 
 // Node is one planned DAG node.
 type Node struct {
-	ID          string          `json:"id,omitempty"`
-	Title       string          `json:"title"`
-	Description string          `json:"description,omitempty"`
-	Scope       string          `json:"scope,omitempty"`
-	Status      string          `json:"status,omitempty"`
-	PRDRefs     []string        `json:"prd_refs,omitempty"`
-	Tags        []string        `json:"tags,omitempty"`
-	DependsOn   []string        `json:"depends_on,omitempty"`
-	Position    *model.Position `json:"position,omitempty"`
+	ID          string              `json:"id,omitempty"`
+	Title       string              `json:"title"`
+	Description string              `json:"description,omitempty"`
+	Scope       string              `json:"scope,omitempty"`
+	Status      string              `json:"status,omitempty"`
+	PRDRefs     []string            `json:"prd_refs,omitempty"`
+	Refs        []model.ExternalRef `json:"refs,omitempty"`
+	Tags        []string            `json:"tags,omitempty"`
+	DependsOn   []string            `json:"depends_on,omitempty"`
+	Position    *model.Position     `json:"position,omitempty"`
 }
 
 // Edge is one planned edge.
@@ -85,6 +86,12 @@ func Load(path string) (*File, error) {
 
 // Import validates the plan and merges it into the DAG.
 func Import(dag *model.DAG, doc *prd.Document, f *File, opts Options) (*Result, error) {
+	return ImportWithSources(dag, doc, nil, f, opts)
+}
+
+// ImportWithSources is Import plus supplemental source documents. Refs may
+// point at the main PRD (p:...) or any registered source (<source_id>:...).
+func ImportWithSources(dag *model.DAG, doc *prd.Document, sources map[string]*prd.Document, f *File, opts Options) (*Result, error) {
 	if f == nil || len(f.Nodes) == 0 {
 		return nil, fmt.Errorf("plan has no nodes")
 	}
@@ -120,6 +127,10 @@ func Import(dag *model.DAG, doc *prd.Document, f *File, opts Options) (*Result, 
 		if id == "" {
 			id = model.NewID("rb", used, fmt.Sprintf("%s#%d", title, i))
 		}
+		refs, rerr := normalizeRefs(pn.Refs)
+		if rerr != nil {
+			return nil, fmt.Errorf("node %q: %w", title, rerr)
+		}
 		if used[id] {
 			if existing := dag.Node(id); existing != nil {
 				// Merge into the existing node.
@@ -127,6 +138,9 @@ func Import(dag *model.DAG, doc *prd.Document, f *File, opts Options) (*Result, 
 				existing.Description = pn.Description
 				existing.Scope = scope
 				existing.PRDRefs = dedup(pn.PRDRefs)
+				if len(refs) > 0 {
+					existing.Refs = refs
+				}
 				existing.Tags = dedup(pn.Tags)
 				existing.UpdatedAt = model.Now()
 				res.UpdatedNodes = append(res.UpdatedNodes, id)
@@ -147,6 +161,7 @@ func Import(dag *model.DAG, doc *prd.Document, f *File, opts Options) (*Result, 
 			Scope:       scope,
 			Status:      status,
 			PRDRefs:     dedup(pn.PRDRefs),
+			Refs:        refs,
 			Tags:        dedup(pn.Tags),
 			SelfMocks:   []model.SelfMock{},
 			ReviewNotes: []model.ReviewNote{},
@@ -230,29 +245,44 @@ func Import(dag *model.DAG, doc *prd.Document, f *File, opts Options) (*Result, 
 		return nil, err
 	}
 
-	// Business leaves must be anchored to PRD paragraphs.
+	// Business leaves must be anchored to PRD paragraphs or carry at least one
+	// node-level external reference (decision excerpt / meeting link).
 	var missing []string
 	for _, n := range dag.Nodes {
-		if n.Scope == model.ScopeMine && dag.Outdegree(n.ID) == 0 && len(n.PRDRefs) == 0 {
+		if n.Scope == model.ScopeMine && dag.Outdegree(n.ID) == 0 && len(n.PRDRefs) == 0 && len(n.Refs) == 0 {
 			missing = append(missing, fmt.Sprintf("%s (%s)", n.ID, n.Title))
 		}
 	}
 	if len(missing) > 0 {
-		return nil, fmt.Errorf("business leaf nodes must contain prd_refs: %s", strings.Join(missing, ", "))
+		return nil, fmt.Errorf("business leaf nodes must contain prd_refs or refs: %s", strings.Join(missing, ", "))
 	}
 
-	// Validate PRD anchors.
-	if doc != nil {
-		anchors := doc.AnchorSet()
+	// Validate anchors against the main PRD plus every registered source.
+	if doc != nil || len(sources) > 0 {
+		anchors := map[string]bool{}
+		if doc != nil {
+			for a := range doc.AnchorSet() {
+				anchors[a] = true
+			}
+		}
+		for _, sd := range sources {
+			if sd == nil {
+				continue
+			}
+			for a := range sd.AnchorSet() {
+				anchors[a] = true
+			}
+		}
 		for _, n := range dag.Nodes {
 			for _, ref := range n.PRDRefs {
-				if anchors[ref] == nil {
-					msg := fmt.Sprintf("node %s references unknown PRD anchor %q", n.ID, ref)
-					if opts.AllowUnknownRefs {
-						res.Warnings = append(res.Warnings, msg)
-					} else {
-						return nil, fmt.Errorf("%s (pass --allow-unknown-refs to import anyway)", msg)
-					}
+				if anchors[ref] {
+					continue
+				}
+				msg := fmt.Sprintf("node %s references unknown PRD anchor %q", n.ID, ref)
+				if opts.AllowUnknownRefs {
+					res.Warnings = append(res.Warnings, msg)
+				} else {
+					return nil, fmt.Errorf("%s (pass --allow-unknown-refs to import anyway)", msg)
 				}
 			}
 		}
@@ -272,6 +302,55 @@ func findIDByTitle(dag *model.DAG, title string) string {
 		}
 	}
 	return ""
+}
+
+func normalizeRefs(in []model.ExternalRef) ([]model.ExternalRef, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	used := map[string]bool{}
+	for _, r := range in {
+		id := strings.TrimSpace(r.ID)
+		if id == "" {
+			continue
+		}
+		if used[id] {
+			return nil, fmt.Errorf("duplicate ref id %q", id)
+		}
+		used[id] = true
+	}
+	out := make([]model.ExternalRef, 0, len(in))
+	for _, r := range in {
+		title := strings.TrimSpace(r.Title)
+		if title == "" {
+			return nil, fmt.Errorf("ref has empty title")
+		}
+		kind := r.Kind
+		if kind == "" {
+			kind = model.RefDecision
+		}
+		if !model.ValidRefKind(kind) {
+			return nil, fmt.Errorf("ref %q has invalid kind %q (url|meeting|decision|chat)", title, kind)
+		}
+		url := strings.TrimSpace(r.URL)
+		if url != "" {
+			lower := strings.ToLower(url)
+			if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+				return nil, fmt.Errorf("ref %q has non-http(s) url %q", title, url)
+			}
+		}
+		id := strings.TrimSpace(r.ID)
+		if id == "" {
+			id = model.NewSequentialID("rf", used)
+		}
+		used[id] = true
+		added := r.AddedAt
+		if added == "" {
+			added = model.Now()
+		}
+		out = append(out, model.ExternalRef{ID: id, Kind: kind, Title: title, URL: url, Quote: r.Quote, AddedAt: added})
+	}
+	return out, nil
 }
 
 func dedup(in []string) []string {

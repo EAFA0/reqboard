@@ -88,7 +88,7 @@ func nodeAdd(a *Args, rest []string) *Error {
 			return fail("%v", derr)
 		}
 		refs := a.Strs("prd-ref")
-		if err := validateRefs(ctx, refs, a.Bool("allow-unknown-refs")); err != nil {
+		if err := validateRefs(ctx, dag, refs, a.Bool("allow-unknown-refs")); err != nil {
 			return err
 		}
 		id := a.Str("id")
@@ -219,7 +219,7 @@ func nodeUpdate(a *Args, id string) *Error {
 		}
 		if a.Has("prd-ref") {
 			refs := a.Strs("prd-ref")
-			if err := validateRefs(ctx, refs, a.Bool("allow-unknown-refs")); err != nil {
+			if err := validateRefs(ctx, dag, refs, a.Bool("allow-unknown-refs")); err != nil {
 				return err
 			}
 			n.PRDRefs = dedupStrings(refs)
@@ -592,7 +592,7 @@ func nodeFail(a *Args, id string) *Error {
 	})
 }
 
-func validateRefs(ctx *Ctx, refs []string, allowUnknown bool) *Error {
+func validateRefs(ctx *Ctx, dag *model.DAG, refs []string, allowUnknown bool) *Error {
 	var cleaned []string
 	for _, r := range refs {
 		if strings.TrimSpace(r) != "" {
@@ -602,19 +602,38 @@ func validateRefs(ctx *Ctx, refs []string, allowUnknown bool) *Error {
 	if len(cleaned) == 0 || allowUnknown {
 		return nil
 	}
-	raw, err := ctx.Store.ReadFile("prd.md")
-	if err != nil || strings.TrimSpace(string(raw)) == "" {
-		return nil
-	}
-	doc, perr := prd.Parse(raw)
-	if perr != nil {
-		return nil
-	}
-	set := doc.AnchorSet()
-	for _, r := range cleaned {
-		if set[r] == nil {
-			return &Error{Code: 1, Msg: "unknown PRD anchor " + r, Text: fmt.Sprintf("[REQBOARD BLOCKED] PRD 中不存在锚点 %q。\n  -> 左栏查看真实锚点，或先运行 `reqboard prd init/sync`；确需跳过校验加 --allow-unknown-refs。\n", r)}
+	anchors := map[string]bool{}
+	mainDoc := loadPRDDoc(ctx)
+	hasMain := false
+	if mainDoc != nil {
+		hasMain = true
+		for a := range mainDoc.AnchorSet() {
+			anchors[a] = true
 		}
+	}
+	sources := loadSourceDocs(ctx, dag)
+	for _, doc := range sources {
+		for a := range doc.AnchorSet() {
+			anchors[a] = true
+		}
+	}
+	if !hasMain && len(sources) == 0 {
+		return nil
+	}
+	for _, r := range cleaned {
+		if anchors[r] {
+			continue
+		}
+		prefix := prd.PrefixOf(r)
+		hint := "左栏查看真实锚点，或先运行 `reqboard prd init/sync`"
+		if prefix != "" && prefix != prd.DefaultPrefix {
+			if dag.Source(prefix) == nil {
+				hint = fmt.Sprintf("补充来源 %q 未登记；先运行 `reqboard source add ... --id %s` 或检查拼写", prefix, prefix)
+			} else {
+				hint = fmt.Sprintf("补充来源 %q 中不存在该锚点；先运行 `reqboard source sync %s <new.md>` 或左栏查看", prefix, prefix)
+			}
+		}
+		return &Error{Code: 1, Msg: "unknown anchor " + r, Text: fmt.Sprintf("[REQBOARD BLOCKED] 锚点 %q 不存在。\n  -> %s；确需跳过校验加 --allow-unknown-refs。\n", r, hint)}
 	}
 	return nil
 }

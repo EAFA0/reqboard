@@ -1,11 +1,11 @@
 ---
 name: reqboard
-description: 多仓复杂需求的本地控制面：PRD 锚点、功能级 DAG、AST Diff 归因、完结硬门禁与 /goal 自动调度。用户提到 ReqBoard、Orphan Diff、To-Delete、reqboard，或要让一个 /goal 协调者持续推进需求时使用。
+description: 多仓复杂需求的本地控制面：主 PRD + 补充来源锚点、节点级拍板 refs、功能级 DAG、AST Diff 归因、完结硬门禁与 /goal 自动调度。用户提到 ReqBoard、Orphan Diff、To-Delete、reqboard、补充来源/会议纪要/拍板摘录，或要让一个 /goal 协调者持续推进需求时使用。
 ---
 
 # ReqBoard
 
-`.reqboard/` 是唯一事实源：`config.json / prd.md / dag.json / bindings.json / events.jsonl`。
+`.reqboard/` 是唯一事实源：`config.json / prd.md / sources/<id>.md / dag.json / bindings.json / events.jsonl`。
 所有写操作走 `reqboard` CLI（flock + 原子 rename + events.jsonl）；不要手改 JSON 绕过门禁。
 
 ## 三种角色
@@ -13,9 +13,13 @@ description: 多仓复杂需求的本地控制面：PRD 锚点、功能级 DAG�
 ### Planner（只拆图，不写码）
 0. `reqboard init --name <slug>` 在无 git 子仓时进入规划模式；看板审完 DAG 后用 `reqboard repo add --name <n> --path <dir> [--base <ref>]` 挂载代码仓。
 1. `reqboard prd init <src.md>`；PRD 更新用 `prd sync <new.md>`（自动对齐锚点并级联 stale）。
-2. `reqboard plan import plan.json`：按业务功能/规则拆节点，业务叶子必须有 `prd_refs`，DAG 必须无环；`todo` 前置节点允许无 `prd_refs`。
-3. `out_of_scope` 红线、`external` 依赖与工程 `todo` 前置必须显式建节点，禁止留给 Agent 脑补；TODO 可用 `reqboard todo add` 或 plan.json 的 `scope: "todo"` 建。
-4. `reqboard status` 检查 Unmapped PRD、覆盖率与 Orphan Diff。
+2. 主 PRD 之外的依据先登记为补充来源，再在 `prd_refs` 里用 `<source_id>:...` 锚点引用：
+   `reqboard source add <file.md> --id <slug> [--title ...] [--kind doc|meeting|chat|spec] [--url ...]`；
+   可直接 `--text "粘贴的会议纪要/群聊拍板"` 或 `--file -` 从 stdin 保存。更新用 `reqboard source sync <id> <new.md>`（级联 stale）。
+   节点级拍板/外链用 `reqboard ref add <node_id> --title "..." [--kind url|meeting|decision|chat] [--url ...] [--quote "..."]`。
+3. `reqboard plan import plan.json`：按业务功能/规则拆节点，业务叶子必须有 `prd_refs`（可引用补充来源锚点）或 `refs`，DAG 必须无环；`todo` 前置节点允许无 `prd_refs`。`plan.json` 节点支持可选 `refs` 数组。
+4. `out_of_scope` 红线、`external` 依赖与工程 `todo` 前置必须显式建节点，禁止留给 Agent 脑补；TODO 可用 `reqboard todo add` 或 plan.json 的 `scope: "todo"` 建。
+5. `reqboard status` 检查 Unmapped PRD、覆盖率与 Orphan Diff。**覆盖率只考核主 `prd.md`**；补充来源未引用段落不产生 Unmapped。
 
 **三段式高质量建图（强烈推荐在技术方案对齐末尾执行，而非冷读 PRD 一把梭）**：
 0. **最佳触发时机**：先和人把技术方案、代码现状、真增量与分工对齐完，在方案收尾阶段产出 `plan.json` 导入看板，再由人在看板微调定版——避免纯看 PRD 冷猜造出假外部依赖和 0 改动废节点。
@@ -42,6 +46,7 @@ description: 多仓复杂需求的本地控制面：PRD 锚点、功能级 DAG�
 `claim → 读注入 → 改码/单测 → bind → check --node → 回报`
 1. `reqboard claim <id> --session <sid> --lease <repo:glob>`
    - 拒绝 `out_of_scope`/`external`/`proposed`/`hold`；注入 PRD 原文、红线、mocked 备注、批注与人工调整。
+   - 自动追加节点引用的补充来源段落原文（标注 `[补充依据 — 与主 PRD 口径冲突时优先采用]`）以及 `refs` 的类型/标题/URL/原话摘录；冲突时以补充依据和最新人工调整优先。
 2. 只改锚定 PRD 覆盖的行为；每处生产改动必须挂载（**默认全局排除单测，只需 `bind` 生产 `impl` 与手写 `mock`，无需绑定 `*_test.go`**）：
    `reqboard bind <id> --repo <r> --file <f> --symbol <s> --role impl|mock --why "..."`
    - 大文件多符号一次挂载：`reqboard bind <id> --repo <r> --file <f> --all-symbols --why "..." [--keep-status]`。
@@ -69,7 +74,7 @@ description: 多仓复杂需求的本地控制面：PRD 锚点、功能级 DAG�
 - 人类在看板的修改优先级最高；`claim` 会注入 `[人工最新调整]`。
 
 ## 常用命令
-`status` / `filter show|set` / `dispatch` / `claim` / `bind [--all-symbols]` / `unbind` / `propose` / `mock add|resolve` / `todo add|list` / `ops add|toggle|remove` / `check --all` / `review-pack` / `done [--unmock-downstream]` / `layout [--include-external]` / `node delete [--force]` / `undo` / `redo`
+`status` / `filter show|set` / `dispatch` / `claim` / `bind [--all-symbols]` / `unbind` / `propose` / `mock add|resolve` / `todo add|list` / `ops add|toggle|remove` / `source add|sync|list|remove` / `ref add|remove` / `check --all` / `review-pack` / `done [--unmock-downstream]` / `layout [--include-external]` / `node delete [--force]` / `undo` / `redo`
 
 Diff 审计默认排除单测（`exclude_tests=true`）与生成代码；需要收窄/放宽时用 `reqboard filter set --include <globs> --exclude <globs> --exclude-tests=true|false`，`filter show --json` 可回读当前生效规则。显式 `bind` 的 mock/impl 文件（以及显式绑定的测试文件）会豁免默认噪声过滤，确保手写 mock 与验收代码可见。
 所有命令支持 `--json`；报错文本即规则注入，按提示纠偏。

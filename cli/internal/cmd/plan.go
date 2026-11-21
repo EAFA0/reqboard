@@ -40,7 +40,7 @@ func runPlan(a *Args, rest []string) *Error {
 			Layout:           !a.Bool("no-layout"),
 			AllowUnknownRefs: a.Bool("allow-unknown-refs"),
 		}
-		res, ierr := plan.Import(dag, doc, pf, opts)
+		res, ierr := plan.ImportWithSources(dag, doc, loadSourceDocs(ctx, dag), pf, opts)
 		if ierr != nil {
 			return &Error{Code: 1, Msg: ierr.Error(), Text: "[REQBOARD BLOCKED] plan 校验失败: " + ierr.Error() + "\n  -> 修复 plan.json 后重试；DAG 未被修改。\n"}
 		}

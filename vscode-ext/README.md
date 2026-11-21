@@ -2,9 +2,17 @@
 
 三栏联动需求看板，配合本地 `reqboard` CLI 使用：
 
-- **左栏**：`prd.md` 原文 + 稳定锚点覆盖热力（绿=已覆盖 / 灰=忽略或红线 / 红=Unmapped）。
+- **左栏**：多来源「需求依据」视图。顶部 Tab 栏为 `[主 PRD]` + 各补充来源（显示标题与被引用段数）+ `[+ 添加来源]`；主 PRD 保留绿/灰/红覆盖热力，补充来源只把被节点引用的段落标淡绿，未引用段落保持安静灰条（绝不标红 `Unmapped`）。
 - **中栏**：主画布默认只渲染我方业务主干（`mine` / `proposed`），按自然拓扑深度左→右展开；仅 `milestone` / `e2e` 终结业务场景节点钉在最右终列。上方 **Prerequisite Dock** 统一收纳 `external` / `collaborator` / `todo`；`out_of_scope` 收进红线胶囊。支持平移缩放、拖拽节点、双击建节点、拖拽连线、编辑边类型/备注、节点状态直改。
-- **右栏**：按节点过滤的多仓 Diff 绑定、`Orphan Diff` / `To-Delete` / `Broken Binding` 警戒桶、Review 通过/打回/Done。
+- **右栏**：按节点过滤的多仓 Diff 绑定、`Orphan Diff` / `To-Delete` / `Broken Binding` 警戒桶、外部依据 / 拍板摘录（Refs）增删、Review 通过/打回/Done。
+
+## 多来源需求依据
+
+- **补充来源**：点 `[+ 添加来源]` 弹出轻量浮层，可直接粘贴会议纪要/群聊拍板文本（填标题、类型 `meeting|chat|doc|spec`、可选 URL）立即保存为 `.reqboard/sources/<id>.md`；也可通过 VS Code 原生文件选择器导入本地 Markdown。CLI 等价命令：`reqboard source add ... --id <slug>`（支持 `--text` 或 `--file -` 从 stdin 粘贴）。
+- **Tab 联动**：点击右栏 `@<source_id>:...` 锚点、画布节点上的补充来源微标，或选中 `prd_refs` 含补充锚点的节点，左栏会自动切到对应来源 Tab 并滚动高亮该段。
+- **段落动作**：补充来源每段悬浮显示 `[+ 建节点]` 与 `[+ 挂到当前节点]`；后者一键把该锚点追加到当前选中节点的 `prd_refs`。
+- **Refs**：右栏与节点编辑弹层都有「外部依据 / 拍板摘录」区，支持 `url|meeting|decision|chat` 类型、标题、可选 URL、可选原话摘录；可点击外链、逐条删除。画布节点卡片若挂有 refs 或补充来源锚点，会显示 `ref N` 微标。
+- **覆盖率口径**：只有主 PRD 参与强制覆盖考核；补充来源未引用段落不会产生 `Unmapped` 噪声。
 
 ## 前置依赖 Dock
 
@@ -43,7 +51,7 @@
 
 ## 使用
 
-1. 安装：`code --install-extension reqboard-vscode-0.2.1.vsix`
+1. 安装：`code --install-extension reqboard-vscode-0.3.0.vsix`
 2. 在需求 worktree 运行 `reqboard init` / `prd init` / `plan import`。
 3. 命令面板执行 **ReqBoard: Open Board**，选择包含 `.reqboard/` 的目录。
 

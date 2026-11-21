@@ -7,7 +7,16 @@ import { CLIError, ReqboardCLI, gitShow } from './cli';
 import { findSymbolLine } from './util';
 import { renderHTML } from './webview';
 
-const WATCHED = ['events.jsonl', 'dag.json', 'bindings.json', 'prd.md', 'config.json'];
+const WATCHED = ['events.jsonl', 'dag.json', 'bindings.json', 'prd.md', 'config.json', 'sources'];
+
+function sourceSlug(seed: string): string {
+  const base = String(seed || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 24);
+  return `${base || 'src'}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+}
 
 /** Singleton webview panel with fs.watch hot reload. */
 export class BoardPanel {
@@ -192,6 +201,89 @@ export class BoardPanel {
         await this.exec(args, 'Diff 过滤已写入 config.json');
         return;
       }
+      case 'source.add': {
+        const title = String(msg.title || '').trim();
+        const text = String(msg.text || '');
+        if (!title) {
+          this.post({ type: 'error', message: '补充来源标题不能为空' });
+          return;
+        }
+        if (!text.trim()) {
+          this.post({ type: 'error', message: '补充来源正文不能为空' });
+          return;
+        }
+        const id = sourceSlug(title);
+        const tmp = path.join(
+          os.tmpdir(),
+          `reqboard-source-${Date.now()}-${Math.random().toString(36).slice(2)}.md`
+        );
+        try {
+          fs.writeFileSync(tmp, text, 'utf8');
+          const args = ['source', 'add', tmp, '--id', id, '--title', title, '--kind', String(msg.kind || 'doc'), '--actor', 'human'];
+          const url = String(msg.url || '').trim();
+          if (url) {
+            args.push('--url', url);
+          }
+          await this.cli.run(args);
+          this.post({ type: 'toast', level: 'info', message: `补充来源已保存：${id}` });
+          this.post({ type: 'source.added', id });
+        } catch (e: any) {
+          this.post({ type: 'error', message: this.describeError(e) });
+        } finally {
+          try {
+            fs.unlinkSync(tmp);
+          } catch {
+            // best-effort temp cleanup
+          }
+        }
+        await this.refresh();
+        return;
+      }
+      case 'source.pick': {
+        const picked = await vscode.window.showOpenDialog({
+          canSelectFiles: true,
+          canSelectFolders: false,
+          canSelectMany: false,
+          filters: { Markdown: ['md', 'markdown', 'txt'] },
+          openLabel: '导入为补充来源',
+        });
+        if (!picked || picked.length === 0) {
+          return;
+        }
+        const file = picked[0].fsPath;
+        const title = path.basename(file).replace(/\.(md|markdown|txt)$/i, '');
+        const id = sourceSlug(title);
+        try {
+          await this.cli.run(['source', 'add', file, '--id', id, '--title', title, '--kind', 'doc', '--actor', 'human']);
+          this.post({ type: 'toast', level: 'info', message: `补充来源已导入：${id}` });
+          this.post({ type: 'source.added', id });
+        } catch (e: any) {
+          this.post({ type: 'error', message: this.describeError(e) });
+        }
+        await this.refresh();
+        return;
+      }
+      case 'ref.add': {
+        const title = String(msg.title || '').trim();
+        if (!title) {
+          this.post({ type: 'error', message: '依据标题不能为空' });
+          return;
+        }
+        const args = ['ref', 'add', String(msg.nodeId), '--title', title, '--kind', String(msg.kind || 'decision'), '--actor', 'human'];
+        const url = String(msg.url || '').trim();
+        if (url) {
+          args.push('--url', url);
+        }
+        const quote = String(msg.quote || '').trim();
+        if (quote) {
+          args.push('--quote', quote);
+        }
+        await this.exec(args, '外部依据已添加');
+        return;
+      }
+      case 'ref.remove':
+        await this.exec(['ref', 'remove', String(msg.nodeId), String(msg.refId), '--actor', 'human'], '外部依据已删除');
+        return;
       case 'todo.add': {
         const title = String(msg.title || '').trim();
         if (!title) {

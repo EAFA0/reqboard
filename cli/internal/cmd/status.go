@@ -113,6 +113,37 @@ func runStatus(a *Args, rest []string) *Error {
 	cov["unmapped_anchors"] = unmapped
 	cov["percent"] = percent
 
+	// Supplemental sources are rendered as their own tabs. They are never part
+	// of the mandatory main-PRD coverage accounting: unreferenced blocks stay
+	// quiet gray in the board and never show up as Unmapped.
+	sourceDocs := loadSourceDocs(ctx, dag)
+	sourceViews := []map[string]interface{}{}
+	referencedSourceBlocks := 0
+	orderedSources := append([]model.Source{}, dag.Sources...)
+	sort.SliceStable(orderedSources, func(i, j int) bool { return orderedSources[i].ID < orderedSources[j].ID })
+	for i := range orderedSources {
+		s := &orderedSources[i]
+		doc := sourceDocs[s.ID]
+		blocks := []map[string]interface{}{}
+		if doc != nil {
+			for _, b := range doc.Blocks {
+				ids := append([]string{}, refs[b.Anchor]...)
+				sort.Strings(ids)
+				if len(ids) > 0 && b.Kind != prd.KindHeading {
+					referencedSourceBlocks++
+				}
+				blocks = append(blocks, map[string]interface{}{
+					"anchor": b.Anchor, "kind": b.Kind, "level": b.Level,
+					"text": b.Text, "node_ids": ids,
+				})
+			}
+		}
+		sourceViews = append(sourceViews, map[string]interface{}{
+			"id": s.ID, "title": s.Title, "kind": s.Kind, "url": s.URL,
+			"file": sourceFile(s), "blocks": blocks,
+		})
+	}
+
 	statusCount := map[string]int{}
 	stale, holds := 0, 0
 	for _, n := range dag.Nodes {
@@ -156,6 +187,7 @@ func runStatus(a *Args, rest []string) *Error {
 	sb.WriteString("\n")
 	sb.WriteString(fmt.Sprintf("  stale=%d  hold=%d  edges=%d  undo=%d  redo=%d\n", stale, holds, len(dag.Edges), undoDepth, redoDepth))
 	sb.WriteString(fmt.Sprintf("  PRD coverage: %.1f%% (%d/%d 段，忽略 %d，红线 %d)，Unmapped %d\n", percent, covered+ignoredN+outN, total, ignoredN, outN, unmappedN))
+	sb.WriteString(fmt.Sprintf("  补充来源: %d 个（%d 段被节点引用；不参与主 PRD 覆盖率考核）\n", len(dag.Sources), referencedSourceBlocks))
 	sb.WriteString(fmt.Sprintf("  Diff: attributed=%d orphan=%d to_delete=%d leased=%d broken=%d (changed_files=%d)\n",
 		len(rep.Attributed), len(rep.Orphan), len(rep.ToDelete), len(rep.Leased), len(rep.Broken), rep.ChangedFiles))
 	sb.WriteString(fmt.Sprintf("  Diff filter: exclude_tests=%t include_globs=%d ignore_globs=%d ignored_files=%d\n",
@@ -220,6 +252,7 @@ func runStatus(a *Args, rest []string) *Error {
 		"prd": map[string]interface{}{
 			"blocks": blocks, "coverage": cov, "ignored": dag.IgnoredPRDRefs,
 		},
+		"sources":  sourceViews,
 		"bindings": bindings.Bindings,
 		"leases":   bindings.Leases,
 		"check": map[string]interface{}{

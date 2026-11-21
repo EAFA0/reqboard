@@ -78,6 +78,18 @@ flowchart LR
   2. **新增段落** → 左栏标为 `Unmapped PRD` 等待建节点或标忽略；
   3. **删除段落** → 关联节点标红提示“确认是否设为 `deprecated` 并触发残骸清理”。
 
+### 3.1.1 `sources/<id>.md`（补充来源）与节点级 `refs`
+
+主 `prd.md` 仍是强制覆盖考核的唯一口径；会议纪要、群聊拍板、补充规格等作为**补充来源**独立存放，避免把口头拍板塞进主 PRD 正文。
+
+* **登记方式**：`reqboard source add <file.md> --id <slug> [--title "..."] [--kind doc|meeting|chat|spec] [--url "..."]`，也支持 `--text "..."` 或 `--file -` 从 stdin 直接粘贴。文件写入 `.reqboard/sources/<slug>.md`，并在 `dag.json` 的 `sources` 数组登记元数据。
+* **独立锚点命名空间**：主 PRD 锚点保持 `@p:...` 不变；补充来源锚点为 `@<slug>:...`（如 `@meeting-review:1-3`）。`prd.Parse` 可无损识别任意合法前缀，`source sync <id> <new.md>` 用同一套标题 + 相似度对齐算法保留旧锚点，并把修改/删除段落关联的节点及下游级联 `stale`。
+* **覆盖率分层**：`status` / `plan import` 的 `Unmapped PRD` 只统计主 `prd.md`；补充来源未被引用的段落保持安静灰条，**绝不产生 Unmapped 噪声**。
+* **引用校验**：节点 `prd_refs` 同时接受主 PRD 锚点与已登记补充来源锚点；业务叶子只要拥有合法 `prd_refs`（含补充来源）或至少一条 `refs` 即可通过 `plan import` 校验。
+* **节点级 `refs`**：`{ id, kind: "url"|"meeting"|"decision"|"chat", title, url?, quote?, added_at }`。用于挂外链、会议入口或拍板原话摘录；`plan.json` 节点也支持可选 `refs` 字段。
+* **规则注入**：`claim` 在主 PRD 原文之后追加节点引用的补充来源段落，明确标注 `[补充依据 — 与主 PRD 口径冲突时优先采用]`，并注入 `refs` 的类型、标题、URL 与 `quote` 原话。
+* **看板呈现**：左栏顶部 Tab = `[主 PRD]` + 各补充来源（标题 + 被引用段数）+ `[+ 添加来源]`；补充来源段落提供 `[+ 建节点]` 与 `[+ 挂到当前节点]`，点击任意 `@<source_id>:...` 锚点会自动切 Tab 并滚动高亮。右栏与节点编辑弹层提供 refs 增删区，画布节点显示 `ref N` 微标。
+
 ### 3.2 `dag.json`（功能/规则级图谱，人类直改与状态真值源）
 
 ```json
@@ -94,7 +106,17 @@ flowchart LR
       "status": "implemented",
       "stale": false,
       "stale_reason": "",
-      "prd_refs": ["p:3.3.4-2", "p:3.3.4-3"],
+      "prd_refs": ["p:3.3.4-2", "p:3.3.4-3", "meeting-review:1-3"],
+      "refs": [
+        {
+          "id": "rf-01",
+          "kind": "decision",
+          "title": "评审拍板：线下单支付成功后可见",
+          "url": "https://example.com/review/decision",
+          "quote": "线下签约单支付成功后立即可见，不再等待其他状态。",
+          "added_at": "2026-11-21T10:00:00+08:00"
+        }
+      ],
       "tags": ["多仓", "需 feature flag"],
       "ops": [
         {
@@ -159,6 +181,17 @@ flowchart LR
       "note": "因 AuthService 权限接口方案未确认，这条链路先用 mock 绕过",
       "updated_by": "human",
       "updated_at": "2026-11-18T21:34:00+08:00"
+    }
+  ],
+  "sources": [
+    {
+      "id": "meeting-review",
+      "title": "评审补充口径",
+      "kind": "meeting",
+      "file": "sources/meeting-review.md",
+      "url": "https://example.com/review",
+      "added_at": "2026-11-21T09:50:00+08:00",
+      "updated_at": "2026-11-21T10:20:00+08:00"
     }
   ],
   "ignored_prd_refs": ["p:1.1-1"]
@@ -306,9 +339,11 @@ CLI 是 coding agent 操作看板的唯一入口（建议用 Go 或 Node/TS 编�
 | 命令 | 典型用法 | 输出与规则注入设计 |
 | :--- | :--- | :--- |
 | **`prd init / sync`** | `reqboard prd sync ./new_prd.md` | 注入/对齐锚点；打印变动段落、自动标 `stale` 的受影响节点清单、新增的 `Unmapped PRD`。 |
-| **`plan import`** | `reqboard plan import plan.json` | 校验 DAG 无环、无悬空边、每个业务叶子节点均有合法 `prd_refs`；输出 PRD 覆盖率报告。 |
+| **`plan import`** | `reqboard plan import plan.json` | 校验 DAG 无环、无悬空边、每个业务叶子节点均有合法 `prd_refs`（可引用补充来源锚点）或 `refs`；节点支持可选 `refs` 数组；输出主 PRD 覆盖率报告（补充来源不计入 Unmapped）。 |
 | **`dispatch`** | `reqboard dispatch --max-parallel 4` | **Goal Orchestrator 核心调度原语**：确定性计算当前可并发推进的节点队列（按 P0 修复/残骸 → P1 左侧优先开发 → P2 闭环快审排序，自动规避租约冲突与熔断节点）；`external|collaborator --hard--> mine` 且外部未 done 的节点不进入 P1，归入 `waiting_external`；`todo` 节点自身不进入 P1，归入 `waiting_todo`，且 `todo --hard--> mine` 默认不卡 P1（仅 `block-start` tag 才卡）；无可推进项时返回 `QUIESCENT` 与分类阻塞清单。 |
-| **`claim`** | `reqboard claim rb-7a2c --lease "order_query:src/esdao/**"` | ① 若目标为 `out_of_scope`/`external`/`collaborator`/`todo`/`proposed`/`hold`，**直接拒绝并报错**；② 成功时打印：**锚定 PRD 原文全文 + 关联 `out_of_scope` 红线 + 所有入边状态及 `mocked` 人工备注 + 未解决的 `review_notes` + `[人工最新调整]` 变更提示**。 |
+| **`claim`** | `reqboard claim rb-7a2c --lease "order_query:src/esdao/**"` | ① 若目标为 `out_of_scope`/`external`/`collaborator`/`todo`/`proposed`/`hold`，**直接拒绝并报错**；② 成功时打印：**锚定 PRD 原文全文 + 补充来源段落原文（标注 `[补充依据 — 与主 PRD 口径冲突时优先采用]`）+ 节点 `refs` 的类型/标题/URL/原话 + 关联 `out_of_scope` 红线 + 所有入边状态及 `mocked` 人工备注 + 未解决的 `review_notes` + `[人工最新调整]` 变更提示**。 |
+| **`source`** | `reqboard source add <file.md> --id <slug> [--title ...] [--kind doc\|meeting\|chat\|spec] [--url ...]`<br>`reqboard source add --text "..." --id <slug>` / `source sync <id> <new.md>` / `source list [--json]` / `source remove <id> [--force]` | 登记/更新补充来源 `.reqboard/sources/<id>.md`，锚点使用 `<id>:...` 命名空间；`sync` 对齐旧锚点并把修改/删除段落关联节点及下游级联 `stale`；`remove` 在有节点引用时默认拒绝，`--force` 连同引用清理。 |
+| **`ref`** | `reqboard ref add <node_id> --title "..." [--kind url\|meeting\|decision\|chat] [--url ...] [--quote "..."]`<br>`reqboard ref remove <node_id> <ref_id>` | 节点级轻量外部依据/拍板摘录；`claim` 自动注入，看板右栏与节点编辑弹层可增删。 |
 | **`bind`** | `reqboard bind rb-7a2c --repo order_query --file ... --symbol ... [--partial "..."] [--role impl\|mock\|test] --why "..."`<br>`reqboard bind rb-7a2c --repo order_query --file ... --all-symbols [--keep-status] --why "..."` | 写入 `bindings.json`；若 `--why` 为空或符号在当前文件不存在，**报错并提示真实可选符号名**。`--all-symbols` 扫描该文件相对 base 的全部改动符号并一次绑定，减少大仓库逐符号调用；`--keep-status` 仅登记代码，不把 `pending` 隐式改为 `in_progress`。 |
 | **`ops`** | `reqboard ops add <node_id> --kind ddl\|gateway\|flag\|other --title "..." [--note "..."]`<br>`reqboard ops toggle\|remove <node_id> <op_id>` | 兼容保留的节点级轻量交付清单；看板节点编辑弹层仍可勾选/增删。跨节点或需要 1→N 阻塞的工程动作请改用 `todo`。 |
 | **`todo`** | `reqboard todo add "<title>" [--kind ddl\|gateway\|flag\|other] [--blocks <n1,n2,...>] [--note "..."]`<br>`reqboard todo list [--json]` | 创建一等 `scope: "todo"` 前置节点：`--kind` 写入 tags，`--blocks` 自动创建 `hard` 边；`todo list` 输出完成状态与阻塞下游。`done <todo-id>` / `node update <todo-id> --status done` 跳过代码门禁并解锁下游。 |
@@ -402,9 +437,9 @@ CLI 是 coding agent 操作看板的唯一入口（建议用 Go 或 Node/TS 编�
 | 区域 | 承载内容 | 核心高频人类交互（全部直写 `.reqboard/`） |
 | :--- | :--- | :--- |
 | **顶部状态条** | Goal Orchestrator 实时运行态 | • 显示 `Running (3 workers active)` / `Quiescent (待人工介入 N 项)`；<br>• `[↩ 撤销 (N)]` / `[↪ 重做 (N)]` 显示可用步数，绑定 `Ctrl+Z` / `Cmd+Z` 与 `Ctrl+Shift+Z` / `Cmd+Shift+Z`（输入框聚焦时不拦截浏览器原生撤销）；<br>• 旧 `Ops 清单` 独立抽屉按钮已移除，DDL / 网关配置 / Feature Flag 全部收敛进顶部统一 **Prerequisite Dock**；<br>• 一键复制 `/goal` 启动命令或通过可配置的 session link（`reqboard.sessionLinkTemplate`）直达主 Orchestrator session。 |
-| **左栏（PRD 原文）** | Webview 渲染 `prd.md` | • 段落左侧彩色覆盖条（已覆盖绿 / `out_of_scope` 灰 / **`Unmapped PRD` 浅红**）；<br>• 划选任意段落右键 → **“一键新建 DAG 节点并锚定”** 或 **“标为背景忽略”**；<br>• 点击任意段落 → 中栏高亮对应节点；点击中栏节点 → 左栏自动滚动高亮原文。 |
+| **左栏（需求依据）** | Webview 渲染主 `prd.md` + 补充来源 | • 顶部 Tab 栏：`[主 PRD]` + 各补充来源（标题 + 被引用段数）+ `[+ 添加来源]`；<br>• 主 PRD 段落左侧彩色覆盖条（已覆盖绿 / `out_of_scope` 灰 / **`Unmapped PRD` 浅红**）；<br>• 补充来源仅把被节点引用的段落标淡绿，未引用段落保持安静灰条，绝不标红 Unmapped；每段悬浮 `[+ 建节点]` / `[+ 挂到当前节点]`；<br>• `[+ 添加来源]` 浮层支持直接粘贴会议纪要/群聊拍板，或走 VS Code 原生文件选择器导入 Markdown；<br>• 点击任意段落/锚点 → 中栏高亮对应节点；点击中栏节点或 `@<source_id>:...` 锚点 → 左栏自动切换 Tab 并滚动高亮原文。 |
 | **中栏（DAG 画布）** | Webview（原生 SVG/DOM + `reqboard layout` 自然拓扑分层） | • 主画布默认只渲染我方主干（`mine` / `proposed`），保持 100% 纯业务功能树；顶部 **Prerequisite Dock** 统一收纳 `external` / `collaborator` / `todo`，`out_of_scope` 收进红线胶囊；<br>• Dock 顶条：`前置依赖 done/total` + 类型筛选 `[全部] [外部] [TODO]` + 状态筛选 `[待就绪] [已就绪]` + `[+ 新增 TODO]` + `[隐藏/展开]` + 右侧 `红线 Out-of-Scope (N)`；<br>• `[+ 新增 TODO]` 极简浮层：标题、类型（DDL / 网关 / Flag / 其他）、可选勾选下游我方节点，回车创建并自动连 `hard` 边；<br>• 每张 TODO 卡片显示类型色标、标题、影响下游数 `→ N`、`[✓ Done]`；悬停/点击高亮全部被阻塞下游并淡化其他节点，点击卡片可编辑标题/类型/备注或删除；<br>• 主画布按**自然拓扑深度（ASAP）**左→右展开，保留真实链路长短；仅带 `milestone` / `e2e` tag 的终结业务场景节点钉在最右终列；<br>• 勾选「画布含前置」后，`board.js` 与 `reqboard layout --include-external` 把 `external` / `collaborator` / `todo` 全部排到最左 Column 0 源头列，自然融入左到右拓扑；<br>• 节点卡片以紧凑胶囊显示所挂前置：`等:DDL` / `✓DDL` / `mock:Auth`，点击直接编辑对应连线；<br>• 双击空白建节点、拖锚点连边、点击节点/边原地改状态、写备注、或勾选 `hold` 暂停自动推进；<br>• 节点编辑弹层与右栏提供 `[删除]`；无绑定直接删，有绑定弹窗区分「标为废弃」与「强制删除」；选中画布节点且非输入态按 `Delete` / `Backspace` 快捷删除，误删可 `Ctrl+Z` 一键还原；<br>• 橙色虚线（`mocked`）与节点上的前置依赖小胶囊；点击切回实线自动触发下游 `stale`；<br>• 虚线 `proposed` 节点卡片直接带 **`[批准]` / `[驳回]`** 按钮；<br>• 正在被 Worker 跑的节点带动态运行徽标，卡片显示 `scope`、`status`、跨仓 `+add/-del`、可配置的 session link 跳转链接。 |
-| **右栏（按节点过滤 Diff）** | Webview 侧栏或 VS Code TreeView + 原生 Diff 编辑器 | • 顶部常驻两个警戒桶：**`[Orphan Diff (N)]`** 和 **`[To-Delete 残骸 (M)]`**；<br>• 选中任意节点 → 仅列出该节点挂载的多仓文件与符号（附带 `--why` 理由）；<br>• 点击文件/符号 → 直接调用 **`vscode.commands.executeCommand('focusedGit.openFileComparison', uri)`** 并定位到对应符号行，在熟悉的多仓 Diff 视图里继续 `diff 跳 diff` 和 `Ctrl+-` 返回；<br>• 节点卡片内置 **`[Reviewed 通过]`** 和 **`[打回 + 写批注]`**，直接写入 `review_notes` 供下一波 Orchestrator 自动派发修复。 |
+| **右栏（按节点过滤 Diff）** | Webview 侧栏或 VS Code TreeView + 原生 Diff 编辑器 | • 顶部常驻两个警戒桶：**`[Orphan Diff (N)]`** 和 **`[To-Delete 残骸 (M)]`**；<br>• 选中任意节点 → 展示「外部依据 / 拍板摘录（Refs）」区，支持类型/标题/URL/原话增删与可点击外链；<br>• 选中任意节点 → 仅列出该节点挂载的多仓文件与符号（附带 `--why` 理由）；<br>• 点击文件/符号 → 直接调用 **`vscode.commands.executeCommand('focusedGit.openFileComparison', uri)`** 并定位到对应符号行，在熟悉的多仓 Diff 视图里继续 `diff 跳 diff` 和 `Ctrl+-` 返回；<br>• 节点卡片内置 **`[Reviewed 通过]`** 和 **`[打回 + 写批注]`**，直接写入 `review_notes` 供下一波 Orchestrator 自动派发修复。 |
 
 ### 8.2 人机并发防踩踏机制
 * 所有对 `dag.json` 和 `bindings.json` 的写入均通过统一文件锁（`flock`）+ 原子 rename 完成。

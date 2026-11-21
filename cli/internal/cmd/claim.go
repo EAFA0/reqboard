@@ -33,6 +33,7 @@ func runClaim(a *Args, rest []string) *Error {
 			return ne
 		}
 		doc := loadPRDDoc(ctx)
+		sources := loadSourceDocs(ctx, dag)
 		blocked := func(reason, rule string) *Error {
 			return &Error{Code: 1, Msg: reason, Text: fmt.Sprintf("[REQBOARD BLOCKED] 无法 claim %s (%s)：%s\n  -> %s\n", id, n.Title, reason, rule)}
 		}
@@ -116,22 +117,42 @@ func runClaim(a *Args, rest []string) *Error {
 			sb.WriteString("  描述: " + n.Description + "\n")
 		}
 		sb.WriteString("\n—— 锚定 PRD 原文（只改这些功能点覆盖的行为） ——\n")
-		if doc == nil {
+		if doc == nil && len(sources) == 0 {
 			sb.WriteString("  [WARN] .reqboard/prd.md 为空或缺失，请先 `reqboard prd init <src.md>`。\n")
 		} else {
-			set := doc.AnchorSet()
 			if len(n.PRDRefs) == 0 {
 				sb.WriteString("  [WARN] 本节点没有 prd_refs；请人类确认是否需要补锚点。\n")
 			}
 			for _, ref := range n.PRDRefs {
-				b := set[ref]
+				b, prefix := anchorBlock(ref, doc, sources)
 				if b == nil {
-					sb.WriteString(fmt.Sprintf("  [MISSING] %s（PRD 中不存在，可能已被 sync 删除）\n", ref))
+					sb.WriteString(fmt.Sprintf("  [MISSING] %s（锚点不存在，可能已被 sync 删除或补充来源已移除）\n", ref))
 					continue
+				}
+				if prefix != prd.DefaultPrefix {
+					src := dag.Source(prefix)
+					title := prefix
+					if src != nil {
+						title = src.Title
+					}
+					sb.WriteString("  [补充依据 — 与主 PRD 口径冲突时优先采用]\n")
+					sb.WriteString(fmt.Sprintf("  来源: %s [%s]\n", title, sourceKind(src)))
 				}
 				sb.WriteString(fmt.Sprintf("  <!-- @%s -->\n", b.Anchor))
 				for _, line := range strings.Split(b.Text, "\n") {
 					sb.WriteString("  " + line + "\n")
+				}
+			}
+		}
+		if len(n.Refs) > 0 {
+			sb.WriteString("\n—— 外部依据 / 拍板摘录（refs） ——\n")
+			for _, r := range n.Refs {
+				sb.WriteString(fmt.Sprintf("  - [%s] %s\n", r.Kind, r.Title))
+				if r.URL != "" {
+					sb.WriteString("      url: " + r.URL + "\n")
+				}
+				if r.Quote != "" {
+					sb.WriteString("      原话: " + r.Quote + "\n")
 				}
 			}
 		}
@@ -148,12 +169,9 @@ func runClaim(a *Args, rest []string) *Error {
 		}
 		for _, x := range redlines {
 			sb.WriteString(fmt.Sprintf("  - %s %s\n", x.ID, x.Title))
-			if doc != nil {
-				set := doc.AnchorSet()
-				for _, ref := range x.PRDRefs {
-					if b := set[ref]; b != nil {
-						sb.WriteString("      " + prd.Summary(b) + "\n")
-					}
+			for _, ref := range x.PRDRefs {
+				if b, _ := anchorBlock(ref, doc, sources); b != nil {
+					sb.WriteString("      " + prd.Summary(b) + "\n")
 				}
 			}
 		}
@@ -219,18 +237,30 @@ func runClaim(a *Args, rest []string) *Error {
 		sb.WriteString("  5. 发现越界/遗漏：用 `reqboard propose --from " + id + " --prd-ref <p:x> --title ... --reason ...`，审批前不要改。\n")
 
 		prdBlocks := []map[string]interface{}{}
-		if doc != nil {
-			set := doc.AnchorSet()
-			for _, ref := range n.PRDRefs {
-				if b := set[ref]; b != nil {
-					prdBlocks = append(prdBlocks, map[string]interface{}{"anchor": b.Anchor, "text": b.Text, "section": b.Section})
-				}
+		sourceBlocks := []map[string]interface{}{}
+		for _, ref := range n.PRDRefs {
+			b, prefix := anchorBlock(ref, doc, sources)
+			if b == nil {
+				continue
 			}
+			view := map[string]interface{}{"anchor": b.Anchor, "text": b.Text, "section": b.Section}
+			if prefix == prd.DefaultPrefix {
+				prdBlocks = append(prdBlocks, view)
+				continue
+			}
+			view["source_id"] = prefix
+			view["source_title"] = prefix
+			if src := dag.Source(prefix); src != nil {
+				view["source_title"] = src.Title
+				view["source_kind"] = src.Kind
+			}
+			sourceBlocks = append(sourceBlocks, view)
 		}
 		data := map[string]interface{}{
 			"ok": true, "node": n, "session_id": session,
-			"prd_blocks": prdBlocks, "lease_patterns": patterns,
-			"in_edges": in, "open_review_notes": notes,
+			"prd_blocks": prdBlocks, "source_blocks": sourceBlocks, "refs": n.Refs,
+			"lease_patterns": patterns,
+			"in_edges":       in, "open_review_notes": notes,
 			"human_events": human, "redlines": redlines,
 			"lease_conflicts": conflicts,
 		}

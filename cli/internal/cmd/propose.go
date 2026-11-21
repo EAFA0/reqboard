@@ -28,7 +28,7 @@ func runPropose(a *Args, rest []string) *Error {
 		if ne != nil {
 			return ne
 		}
-		if err := validateRefs(ctx, refs, a.Bool("allow-unknown-refs")); err != nil {
+		if err := validateRefs(ctx, dag, refs, a.Bool("allow-unknown-refs")); err != nil {
 			return err
 		}
 		used := dag.NodeIDSet()
