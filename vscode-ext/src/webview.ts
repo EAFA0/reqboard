@@ -90,7 +90,7 @@ export function renderHTML(webview: vscode.Webview, extensionUri: vscode.Uri): s
         <svg id="dag-edges" xmlns="http://www.w3.org/2000/svg"></svg>
         <div id="dag-nodes"></div>
       </div>
-      <div id="dag-hint" class="hint">拖拽平移 · 滚轮缩放 · 双击空白建节点 · 从节点右侧圆点拖拽连线</div>
+      <div id="dag-hint" class="hint">拖拽平移 · 滚轮缩放 · 单击选中 · 双击节点编辑 · 双击空白建节点 · 右侧圆点拖拽连线</div>
     </div>
   </section>
   <section id="diff-pane" class="pane">

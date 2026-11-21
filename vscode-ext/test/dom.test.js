@@ -235,6 +235,10 @@ function click(window, el) {
   el.dispatchEvent(new window.Event('click', { bubbles: true }));
 }
 
+function dblclick(window, el) {
+  el.dispatchEvent(new window.Event('dblclick', { bubbles: true }));
+}
+
 function parseTransform(el) {
   const m = /translate\(([-\d.]+)px,\s*([-\d.]+)px\)\s*scale\(([-\d.]+)\)/.exec(el.style.transform || '');
   assert.ok(m, 'unexpected transform: ' + el.style.transform);
@@ -535,11 +539,18 @@ test('Delete removes an unbound node and asks before force-deleting a bound node
   assert.strictEqual(forced.force, true);
 });
 
-test('node editor delete button routes through the delete guard', () => {
+test('node single-click selects without popup; double-click and right-pane edit button open editor', () => {
   const { document, window, messages } = boot();
   click(window, document.querySelector('.dag-node[data-node="rb-b"]'));
+  assert.strictEqual(document.querySelector('.popup'), null, 'single click must not open floating editor popup');
+  assert.strictEqual(document.getElementById('sel-node-badge').textContent, 'rb-b');
+
+  click(window, document.querySelector('#diff-body [data-edit-node="rb-b"]'));
+  assert.ok(document.querySelector('.popup'), 'right-pane edit button should open node editor');
+
+  dblclick(window, document.querySelector('.dag-node[data-node="rb-b"]'));
   const editor = document.querySelector('.popup');
-  assert.ok(editor, 'node editor missing');
+  assert.ok(editor, 'node editor missing on dblclick');
   click(window, editor.querySelector('[data-delete]'));
   const msg = messages.filter((m) => m.type === 'node.delete').pop();
   assert.ok(msg && msg.id === 'rb-b');
@@ -616,12 +627,12 @@ test('toolbar layout keeps full-graph mode when external canvas is on', () => {
 
 test('node editor supports adding and toggling ops', () => {
   const { document, window, messages } = boot();
-  click(window, document.querySelector('.dag-node[data-node="rb-a"]'));
+  dblclick(window, document.querySelector('.dag-node[data-node="rb-a"]'));
   const editor = document.querySelector('.popup');
   assert.ok(editor, 'node editor missing');
   click(window, editor.querySelector('[data-editor-op-toggle="op-01"]'));
   assert.strictEqual(messages.pop().type, 'ops.toggle');
-  click(window, document.querySelector('.dag-node[data-node="rb-a"]'));
+  dblclick(window, document.querySelector('.dag-node[data-node="rb-a"]'));
   const editor2 = document.querySelector('.popup');
   editor2.querySelector('#ne-op-title').value = '编辑器新增 Flag';
   editor2.querySelector('#ne-op-kind').selectedIndex = 2;

@@ -1702,7 +1702,7 @@
     }
     const notes = selected.review_notes || [];
     const mocks = selected.self_mocks || [];
-    let html = `<div class="section-title" style="margin-top:2px">功能点</div>
+    let html = `<div class="section-title" style="margin-top:2px;display:flex;align-items:center;justify-content:space-between"><span>功能点</span><button class="bucket-action-btn" data-edit-node="${esc(selected.id)}" title="编辑节点标题、描述、状态与标签（也可双击画布节点）">编辑</button></div>
       <div><b>${esc(selected.title)}</b> <span class="badge">${esc(selected.id)}</span></div>
       <div class="prd-refs">${(selected.prd_refs || []).map((r) => `<span class="prd-ref" data-prd-ref="${esc(r)}">@${esc(r)}</span>`).join('') || '<span class="muted">无 PRD 锚点</span>'}</div>`;
     if (selected.description) {
@@ -2320,6 +2320,20 @@
       return;
     }
     selectNode(n.id, { center: false });
+    closePopup();
+  });
+
+  $('dag-nodes').addEventListener('dblclick', (e) => {
+    const nodeEl = e.target.closest('.dag-node');
+    if (!nodeEl) {
+      return;
+    }
+    e.stopPropagation();
+    const n = findNode(nodeEl.dataset.node);
+    if (!n) {
+      return;
+    }
+    selectNode(n.id, { center: false });
     openNodeEditor(n, nodeEl.getBoundingClientRect());
   });
 
@@ -2485,6 +2499,15 @@
         return;
       }
       post({ type: 'ops.add', nodeId: opAdd.dataset.opAdd, kind: selectValue(kindEl, 'other'), title });
+      return;
+    }
+    const editNodeBtn = e.target.closest('[data-edit-node]');
+    if (editNodeBtn) {
+      const target = findNode(editNodeBtn.dataset.editNode);
+      if (target) {
+        const rect = editNodeBtn.getBoundingClientRect();
+        openNodeEditor(target, { left: Math.max(8, rect.left - 340), right: rect.left - 8, top: rect.bottom + 4 });
+      }
       return;
     }
     const del = e.target.closest('[data-delete-node]');

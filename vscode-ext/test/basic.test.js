@@ -57,7 +57,7 @@ test('findSymbolLine handles func/method/type', () => {
 test('package.json declares the board command and main entry', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
   assert.strictEqual(pkg.main, './dist/extension.js');
-  assert.strictEqual(pkg.version, '0.3.0');
+  assert.strictEqual(pkg.version, '0.3.1');
   const commands = (pkg.contributes.commands || []).map((c) => c.command);
   assert.ok(commands.includes('reqboard.openBoard'));
   assert.ok(fs.existsSync(path.join(__dirname, '..', 'dist', 'extension.js')));
