@@ -340,6 +340,7 @@ func LayoutWith(dag *model.DAG, includeExternal bool) {
 			}
 		}
 	}
+	rightAlignDepths(dag, order, mainSet, nil, nil, depth)
 	byDepth := map[int][]*model.Node{}
 	maxDepth := 0
 	for _, n := range main {
@@ -423,6 +424,7 @@ func layoutFull(dag *model.DAG, order []string) {
 		}
 		inFlow[n.ID] = true
 	}
+	pinned := map[string]bool{}
 	for _, id := range order {
 		n := dag.Node(id)
 		if n == nil || !inFlow[id] {
@@ -430,6 +432,7 @@ func layoutFull(dag *model.DAG, order []string) {
 		}
 		if isSource(n) {
 			depth[id] = 0
+			pinned[id] = true
 			continue
 		}
 		for _, e := range dag.InEdges(id) {
@@ -441,6 +444,9 @@ func layoutFull(dag *model.DAG, order []string) {
 			}
 		}
 	}
+	rightAlignDepths(dag, order, inFlow, pinned, func(e *model.Edge) bool {
+		return model.BlockingEdge(e.Kind)
+	}, depth)
 
 	byDepth := map[int][]*model.Node{}
 	maxDepth, maxCount := 0, 1
@@ -549,4 +555,101 @@ func ComputeCoverage(dag *model.DAG, doc *prd.Document) Coverage {
 		c.Percent = float64(c.Covered+c.Ignored) / float64(c.Total) * 100
 	}
 	return c
+}
+
+func isMilestoneNode(n *model.Node) bool {
+	if n == nil {
+		return false
+	}
+	for _, t := range n.Tags {
+		switch strings.ToLower(strings.TrimSpace(t)) {
+		case "milestone", "e2e":
+			return true
+		}
+	}
+	return false
+}
+
+// rightAlignDepths pulls connected terminal nodes (in > 0, out == 0) to the
+// rightmost feature column and pins terminal milestone/e2e nodes to the far
+// right, then propagates ALAP backwards so short chains converge naturally
+// on the right instead of crowding Column 0/1. Truly isolated nodes stay left.
+func rightAlignDepths(dag *model.DAG, order []string, active map[string]bool, pinned map[string]bool, edgeFilter func(*model.Edge) bool, depth map[string]int) {
+	inCount := map[string]int{}
+	outTargets := map[string][]string{}
+	for _, e := range dag.Edges {
+		if !active[e.From] || !active[e.To] {
+			continue
+		}
+		if edgeFilter != nil && !edgeFilter(e) {
+			continue
+		}
+		inCount[e.To]++
+		outTargets[e.From] = append(outTargets[e.From], e.To)
+	}
+	featureMax := 0
+	hasTerminalMilestone := false
+	hasNonMilestoneAtMax := false
+	for id := range active {
+		if pinned != nil && pinned[id] {
+			continue
+		}
+		if len(outTargets[id]) == 0 && isMilestoneNode(dag.Node(id)) {
+			hasTerminalMilestone = true
+			continue
+		}
+		if depth[id] > featureMax {
+			featureMax = depth[id]
+		}
+	}
+	for id := range active {
+		if pinned != nil && pinned[id] {
+			continue
+		}
+		if !(len(outTargets[id]) == 0 && isMilestoneNode(dag.Node(id))) && depth[id] == featureMax && (inCount[id] > 0 || len(outTargets[id]) > 0) {
+			hasNonMilestoneAtMax = true
+			break
+		}
+	}
+	milestoneCol := featureMax
+	if hasTerminalMilestone && hasNonMilestoneAtMax {
+		milestoneCol = featureMax + 1
+	}
+	for id := range active {
+		if pinned != nil && pinned[id] {
+			continue
+		}
+		if len(outTargets[id]) == 0 && isMilestoneNode(dag.Node(id)) && depth[id] > milestoneCol {
+			milestoneCol = depth[id]
+		}
+	}
+
+	for i := len(order) - 1; i >= 0; i-- {
+		id := order[i]
+		if !active[id] || (pinned != nil && pinned[id]) {
+			continue
+		}
+		outs := outTargets[id]
+		if len(outs) == 0 {
+			if isMilestoneNode(dag.Node(id)) {
+				if milestoneCol > depth[id] {
+					depth[id] = milestoneCol
+				}
+			} else if inCount[id] > 0 {
+				if featureMax > depth[id] {
+					depth[id] = featureMax
+				}
+			}
+			continue
+		}
+		minChild := -1
+		for _, to := range outs {
+			if minChild < 0 || depth[to] < minChild {
+				minChild = depth[to]
+			}
+		}
+		if minChild-1 > depth[id] {
+			depth[id] = minChild - 1
+		}
+	}
 }

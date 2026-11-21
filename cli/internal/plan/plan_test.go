@@ -204,3 +204,37 @@ func TestLayoutParksNonMainNodesOutsideMainGrid(t *testing.T) {
 		t.Fatalf("proposed node should be laid out on the main grid: %+v", prop.Position)
 	}
 }
+
+func TestLayoutRightAlignsSinksAndMilestones(t *testing.T) {
+	d := model.NewDAG("x")
+	mk := func(id string, tags ...string) *model.Node {
+		n := &model.Node{ID: id, Title: id, Scope: model.ScopeMine, Status: model.StatusPending, Tags: tags}
+		d.AddNode(n)
+		return n
+	}
+	a0, _, a2, a3 := mk("a0"), mk("a1"), mk("a2"), mk("a3")
+	b0, b1 := mk("b0"), mk("b1")
+	iso := mk("iso")
+	ms := mk("ms", "milestone", "e2e")
+
+	d.AddEdge(&model.Edge{ID: "e1", From: "a0", To: "a1", Kind: model.EdgeHard})
+	d.AddEdge(&model.Edge{ID: "e2", From: "a1", To: "a2", Kind: model.EdgeHard})
+	d.AddEdge(&model.Edge{ID: "e3", From: "a2", To: "a3", Kind: model.EdgeHard})
+	d.AddEdge(&model.Edge{ID: "e4", From: "b0", To: "b1", Kind: model.EdgeHard})
+	d.AddEdge(&model.Edge{ID: "e5", From: "a0", To: "ms", Kind: model.EdgeDiscovered})
+
+	Layout(d)
+
+	if b1.Position.X != a3.Position.X {
+		t.Fatalf("short-chain sink b1.x=%.0f should right-align with a3.x=%.0f", b1.Position.X, a3.Position.X)
+	}
+	if b0.Position.X != a2.Position.X {
+		t.Fatalf("b0.x=%.0f should pull right next to b1 (expected %.0f)", b0.Position.X, a2.Position.X)
+	}
+	if ms.Position.X <= a3.Position.X {
+		t.Fatalf("milestone ms.x=%.0f should sit right of feature sink a3.x=%.0f", ms.Position.X, a3.Position.X)
+	}
+	if iso.Position.X != a0.Position.X {
+		t.Fatalf("isolated node iso.x=%.0f should stay on leftmost column %.0f", iso.Position.X, a0.Position.X)
+	}
+}
