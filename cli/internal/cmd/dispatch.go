@@ -46,7 +46,7 @@ func runDispatch(a *Args, rest []string) *Error {
 			dag.Orchestrator.State = "running"
 		}
 		dag.Touch()
-		if err := ctx.Store.SaveDAG(dag); err != nil {
+		if err := ctx.Store.SaveDAGNoUndo(dag); err != nil {
 			return fail("save dag.json: %v", err)
 		}
 		_ = ctx.Store.AppendEvent(ctx.event("dispatch", "", fmt.Sprintf("status=%s items=%d deferred=%d", plan.Status, len(plan.Items), len(plan.Deferred))))

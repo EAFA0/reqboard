@@ -244,11 +244,18 @@ func (s *Store) LoadDAG() (*model.DAG, error) {
 	return &d, nil
 }
 
-// SaveDAG writes dag.json.
+// SaveDAG writes dag.json and records a pre-state undo snapshot.
 func (s *Store) SaveDAG(d *model.DAG) error {
 	if err := s.capturePreState("dag.json"); err != nil {
 		return err
 	}
+	d.SchemaVersion = model.SchemaVersion
+	return s.writeJSON("dag.json", d)
+}
+
+// SaveDAGNoUndo writes dag.json without pushing to the user undo stack.
+// Used for runtime metadata heartbeats such as orchestrator dispatch status.
+func (s *Store) SaveDAGNoUndo(d *model.DAG) error {
 	d.SchemaVersion = model.SchemaVersion
 	return s.writeJSON("dag.json", d)
 }

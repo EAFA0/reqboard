@@ -490,7 +490,7 @@ export class BoardPanel {
         return;
       case 'copy.goal':
         await vscode.env.clipboard.writeText(
-          '/goal 读取 .reqboard/ 当前状态，循环执行 `reqboard dispatch` 并按 P0→P1→P2 清单并发派发 Worker；每个 Worker 只领 1 个 node_id，走 claim → 改码 → bind → check --node → done；无项时输出 QUIESCENT 阻塞账单并停止。'
+          '/goal 作为 ReqBoard 协调者（只调度不写业务代码），循环执行 `reqboard dispatch` 并按 P0→P1→P2 并发扇出单节点 Worker：每个 Worker 只领 1 个 node_id，走 claim → 改码/包内单测（不跑全仓单测）→ bind（仅挂生产 impl 与手写 mock，不绑单测）→ check --node → 能完结就 done，暂卡门禁则显式 `node update --status implemented` 释放租约，遇阻则 `node fail`；每波回收后做整仓校验并继续 dispatch，直到返回 QUIESCENT 输出分类阻塞账单并停止。'
         );
         this.post({ type: 'toast', level: 'info', message: '已复制 /goal 推进指令' });
         return;
