@@ -1960,3 +1960,195 @@ textarea:focus {
     padding: 2px 5px;
   }
 }
+
+/* ---------- collapsible side panes ---------- */
+#columns.prd-collapsed {
+  grid-template-columns: 28px minmax(420px, 1.55fr) minmax(300px, 1.1fr);
+}
+
+#columns.diff-collapsed {
+  grid-template-columns: minmax(280px, 1fr) minmax(420px, 1.55fr) 28px;
+}
+
+#columns.prd-collapsed.diff-collapsed {
+  grid-template-columns: 28px 1fr 28px;
+}
+
+.pane-head-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.pane-collapse-btn {
+  padding: 0 6px;
+  height: 22px;
+  line-height: 20px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--rb-muted);
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+.pane-collapse-btn:hover {
+  color: var(--rb-fg);
+  border-color: var(--rb-border);
+  background: var(--rb-panel-2);
+}
+
+.pane-collapsed-rail {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  padding: 10px 0;
+  border: none;
+  border-radius: 0;
+  background: var(--rb-panel);
+  color: var(--rb-muted);
+  cursor: pointer;
+}
+
+.pane-collapsed-rail:hover {
+  background: var(--rb-panel-2);
+  color: var(--rb-fg);
+}
+
+.pane-collapsed-rail .rail-arrow {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.pane-collapsed-rail .rail-label {
+  writing-mode: vertical-rl;
+  letter-spacing: 2px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.pane.collapsed > .pane-head,
+.pane.collapsed > .pane-body,
+.pane.collapsed > .diff-filter {
+  display: none;
+}
+
+.pane.collapsed > .pane-collapsed-rail {
+  display: flex;
+}
+
+/* ---------- agent launcher & bucket quick action ---------- */
+.bucket-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bucket-action-btn {
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  border-radius: 3px;
+}
+
+.launcher-popup {
+  width: 340px;
+  padding: 10px;
+}
+
+.launcher-sub {
+  font-size: 11px;
+  color: var(--rb-muted);
+  margin: 2px 0 8px 0;
+}
+
+.launcher-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.launcher-row {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.launcher-item {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  text-align: left;
+  padding: 6px 8px;
+  border: 1px solid var(--rb-border);
+  border-radius: 5px;
+  background: var(--rb-panel);
+  color: var(--rb-fg);
+}
+
+.launcher-item:hover {
+  border-color: var(--rb-accent);
+  background: var(--rb-panel-2);
+}
+
+.launcher-item-top {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.launcher-item-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.launcher-count {
+  font-size: 10px;
+  color: var(--rb-muted);
+  border: 1px solid var(--rb-border);
+  border-radius: 9px;
+  padding: 0 5px;
+}
+
+.launcher-item-desc {
+  font-size: 11px;
+  color: var(--rb-muted);
+  line-height: 1.35;
+}
+
+.launcher-copy-btn {
+  flex: 0 0 auto;
+  padding: 0 7px;
+  font-size: 11px;
+  color: var(--rb-muted);
+  background: var(--rb-panel);
+  border: 1px solid var(--rb-border);
+}
+
+.launcher-copy-btn:hover {
+  color: var(--rb-fg);
+  border-color: var(--rb-accent);
+}
+
+.launcher-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--rb-border);
+  font-size: 11px;
+}
+
+.launcher-foot button {
+  font-size: 11px;
+  padding: 2px 6px;
+}

@@ -39,15 +39,22 @@ export function renderHTML(webview: vscode.Webview, extensionUri: vscode.Uri): s
     <button id="btn-refresh" title="重新执行 status 与多仓 git diff">刷新 Diff</button>
     <button id="btn-fit" title="缩放以完整显示 DAG">适应画布</button>
     <button id="btn-layout" title="按自然拓扑深度重新排版（milestone/e2e 钉最右）">自动左到右排版</button>
-    <button id="btn-goal" title="复制 /goal 推进指令">复制 /goal 推进指令</button>
+    <button id="btn-agent" class="primary" title="发射本地 Agent 终端或复制任务指令">发射 Agent ▾</button>
     <button id="btn-orch" title="打开 Orchestrator session">跳回 Orchestrator Session</button>
   </div>
 </header>
 <main id="columns">
   <section id="prd-pane" class="pane">
+    <button id="btn-expand-prd" class="pane-collapsed-rail" title="展开左侧 PRD 栏">
+      <span class="rail-arrow">▸</span>
+      <span class="rail-label">PRD</span>
+    </button>
     <div class="pane-head prd-head">
       <div id="source-tabs" class="source-tabs"></div>
-      <span id="coverage-badge" class="badge"></span>
+      <span class="pane-head-right">
+        <span id="coverage-badge" class="badge"></span>
+        <button id="btn-collapse-prd" class="pane-collapse-btn" title="折叠左侧 PRD 栏">‹</button>
+      </span>
     </div>
     <div id="prd-list" class="pane-body"></div>
   </section>
@@ -87,9 +94,16 @@ export function renderHTML(webview: vscode.Webview, extensionUri: vscode.Uri): s
     </div>
   </section>
   <section id="diff-pane" class="pane">
+    <button id="btn-expand-diff" class="pane-collapsed-rail" title="展开右侧 Diff 栏">
+      <span class="rail-arrow">◂</span>
+      <span class="rail-label">Diff</span>
+    </button>
     <div class="pane-head">
       <span>Diff / Review</span>
-      <span id="sel-node-badge" class="badge"></span>
+      <span class="pane-head-right">
+        <span id="sel-node-badge" class="badge"></span>
+        <button id="btn-collapse-diff" class="pane-collapse-btn" title="折叠右侧 Diff 栏">›</button>
+      </span>
     </div>
     <div id="diff-filter" class="diff-filter">
       <label class="df-toggle" title="勾选后单测文件不计入 Diff 审计"><input type="checkbox" id="df-exclude-tests" checked> 排除单测</label>

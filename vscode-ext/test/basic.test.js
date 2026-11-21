@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const util = require('../dist/util.js');
+const launcher = require('../dist/launcher.js');
 
 function test(name, fn) {
   try {
@@ -108,6 +109,33 @@ test('webview assets are self-contained (no CDN)', () => {
   assert.ok(css.includes('.dag-node'));
   assert.ok(!/https?:\/\//.test(js), 'board.js must not reference external URLs');
   assert.ok(!/https?:\/\//.test(css), 'board.css must not reference external URLs');
+});
+
+test('launcher builds safe shell commands, prompt overrides and local stats', () => {
+  assert.strictEqual(launcher.shellQuote("a'b c"), "'a'\\''b c'");
+  assert.strictEqual(launcher.buildLaunchCommand('', 'hi'), '');
+  assert.strictEqual(
+    launcher.buildLaunchCommand('my-cli -- {prompt}', "hello 'world'"),
+    "my-cli -- 'hello '\\''world'\\'''"
+  );
+  assert.strictEqual(
+    launcher.buildLaunchCommand('my-cli -m fast', 'go'),
+    "my-cli -m fast 'go'"
+  );
+  const p = launcher.renderPrompt('node_fix', {
+    nodeId: 'rb-7',
+    overrides: { node_fix: 'fix {nodeId}\nnow' },
+  });
+  assert.strictEqual(p, 'fix rb-7 now');
+
+  let stats = launcher.recordLauncherUsage({}, 'push_goal', 'terminal', '2026-11-21T00:00:00Z');
+  stats = launcher.recordLauncherUsage(stats, 'push_goal', 'clipboard', '2026-11-21T00:01:00Z');
+  assert.strictEqual(stats.push_goal.total, 2);
+  assert.strictEqual(stats.push_goal.terminal, 1);
+  assert.strictEqual(stats.push_goal.clipboard, 1);
+  const counts = launcher.summarizeLauncherCounts(stats);
+  assert.strictEqual(counts.push_goal, 2);
+  assert.strictEqual(counts.audit_orphan, 0);
 });
 
 console.log('all basic extension tests passed');

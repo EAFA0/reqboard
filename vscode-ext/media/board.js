@@ -5,6 +5,7 @@
   const NODE_W = 230;
   const NODE_H = 120;
 
+  const savedUiState = (typeof vscode.getState === 'function' ? vscode.getState() : null) || {};
   const state = {
     snap: null,
     selectedNode: null,
@@ -28,11 +29,51 @@
     activeSource: 'p',
     pendingSource: null,
     sourceScroll: {},
+    prdCollapsed: !!savedUiState.prdCollapsed,
+    diffCollapsed: !!savedUiState.diffCollapsed,
   };
   let justDragged = false;
   let toastTimer = null;
 
   const $ = (id) => document.getElementById(id);
+
+  function persistUiState() {
+    if (typeof vscode.setState === 'function') {
+      vscode.setState({
+        prdCollapsed: !!state.prdCollapsed,
+        diffCollapsed: !!state.diffCollapsed,
+      });
+    }
+  }
+
+  function applyPaneCollapse() {
+    const cols = $('columns');
+    const prd = $('prd-pane');
+    const diff = $('diff-pane');
+    if (cols) {
+      cols.classList.toggle('prd-collapsed', !!state.prdCollapsed);
+      cols.classList.toggle('diff-collapsed', !!state.diffCollapsed);
+    }
+    if (prd) {
+      prd.classList.toggle('collapsed', !!state.prdCollapsed);
+    }
+    if (diff) {
+      diff.classList.toggle('collapsed', !!state.diffCollapsed);
+    }
+    if (state.snap && state.view.initialized) {
+      applyTransform();
+    }
+  }
+
+  function setPaneCollapsed(side, collapsed) {
+    if (side === 'prd') {
+      state.prdCollapsed = !!collapsed;
+    } else if (side === 'diff') {
+      state.diffCollapsed = !!collapsed;
+    }
+    persistUiState();
+    applyPaneCollapse();
+  }
 
   function post(msg) {
     vscode.postMessage(msg);
@@ -669,6 +710,9 @@
   }
 
   function selectAnchor(anchor, centerDAG) {
+    if (state.prdCollapsed) {
+      setPaneCollapsed('prd', false);
+    }
     state.selectedAnchor = anchor;
     state.anchorBarClosed = false;
     ensureAnchorTab(anchor);
@@ -1467,8 +1511,11 @@
   function bucketHTML(key, title, items, renderItem) {
     const open = state.bucketOpen[key] !== false;
     const body = items.length ? items.map(renderItem).join('') : '<div class="empty">无</div>';
+    const quickAction = key === 'orphan' && items.length > 0
+      ? '<button class="bucket-action-btn" data-launch-action="audit_orphan" title="发射本地 Agent 审计 Orphan Diff">审计</button>'
+      : '';
     return `<div class="bucket">
-      <div class="bucket-head ${key}" data-bucket="${key}"><span>${esc(title)} (${items.length})</span><span>${open ? '▾' : '▸'}</span></div>
+      <div class="bucket-head ${key}" data-bucket="${key}"><span>${esc(title)} (${items.length})</span><span class="bucket-head-actions">${quickAction}<span>${open ? '▾' : '▸'}</span></span></div>
       <div class="bucket-body ${open ? '' : 'hidden'}">${body}</div>
     </div>`;
   }
@@ -1689,11 +1736,16 @@
         html += `<div class="review-note ${r.status === 'resolved' ? 'resolved' : ''}">${esc(r.id)} · ${esc(r.status)}：${esc(r.comment)}</div>`;
       }
     }
+    const hasOpenNotes = selected.status === 'changes_requested' ||
+      notes.some((r) => r.status !== 'resolved');
+    const nodeLaunchAction = hasOpenNotes ? 'node_fix' : 'node_work';
+    const nodeLaunchLabel = hasOpenNotes ? '交给 Agent 修批注' : '交给 Agent 推进';
     html += refsSectionHTML(selected);
     html += opsSectionHTML(selected);
     html += `<div class="review-actions">
       <button class="primary" data-review-pass="${esc(selected.id)}">Reviewed 通过</button>
       <button data-review-reject="${esc(selected.id)}">打回 + 写批注</button>
+      <button data-launch-action="${nodeLaunchAction}" data-launch-node="${esc(selected.id)}" title="发射本地 Agent 处理该节点">${nodeLaunchLabel}</button>
       <button class="danger" data-done="${esc(selected.id)}">标记 Done</button>
       <button class="danger" data-delete-node="${esc(selected.id)}" title="删除节点（有 bindings 时需确认）">删除</button>
     </div>
@@ -2440,6 +2492,20 @@
       requestDeleteNode(del.dataset.deleteNode);
       return;
     }
+    const launchBtn = e.target.closest('[data-launch-action]');
+    if (launchBtn) {
+      e.stopPropagation();
+      const action = launchBtn.dataset.launchAction;
+      const nodeId = launchBtn.dataset.launchNode || '';
+      const nodeObj = nodeId ? findNode(nodeId) : null;
+      post({
+        type: 'agent.launch',
+        action,
+        nodeId: nodeId || undefined,
+        nodeTitle: nodeObj ? nodeObj.title : undefined,
+      });
+      return;
+    }
     const head = e.target.closest('[data-bucket]');
     if (head) {
       const key = head.dataset.bucket;
@@ -2630,13 +2696,105 @@
     post({ type: 'layout', includeExternal: state.showExternalCanvas });
   };
 
+  const WORKSPACE_LAUNCH_ACTIONS = [
+    { id: 'push_goal', label: '推进完整任务', desc: '按 reqboard dispatch 持续推进当前可执行节点直至闭环' },
+    { id: 'review_simplify', label: 'Review 与代码精简', desc: '对照 PRD、红线、bindings 与 mock 债做代码审查和精简' },
+    { id: 'audit_orphan', label: '审计 Orphan / 残骸 Diff', desc: '按 reqboard check --json 逐条分类未归属改动，先汇报后动手' },
+    { id: 'plan_dag', label: '规划 / 校准 DAG', desc: '结合现有代码库与 PRD 建图或校准 stale 节点' },
+  ];
+
+  function openAgentMenu(anchorEl) {
+    if (state.popup && state.popup.classList.contains('launcher-popup')) {
+      closePopup();
+      return;
+    }
+    closePopup();
+    const launcher = (state.snap && state.snap.launcher) || {};
+    const counts = launcher.counts || {};
+    const configured = !!launcher.configured;
+    const div = document.createElement('div');
+    div.className = 'popup launcher-popup';
+    const rows = WORKSPACE_LAUNCH_ACTIONS.map((a) => {
+      const c = Number(counts[a.id]) || 0;
+      const countBadge = c > 0 ? `<span class="launcher-count">${c} 次</span>` : '';
+      return `<div class="launcher-row">
+        <button class="launcher-item" data-menu-launch="${esc(a.id)}" title="${configured ? '点击拉起本地终端' : '未配置命令模板，点击将复制指令'}">
+          <div class="launcher-item-top">
+            <span class="launcher-item-title">${esc(a.label)}</span>
+            ${countBadge}
+          </div>
+          <div class="launcher-item-desc">${esc(a.desc)}</div>
+        </button>
+        <button class="launcher-copy-btn" data-menu-copy="${esc(a.id)}" title="仅复制单行指令到剪贴板">复制</button>
+      </div>`;
+    }).join('');
+    div.innerHTML = `<button class="close" data-close>×</button>
+      <h4>发射本地 Agent</h4>
+      <div class="launcher-sub">${configured ? '已配置 agentCommand · 点击新开 VS Code 终端执行' : '未配置 reqboard.agentCommand · 点击默认复制指令'}</div>
+      <div class="launcher-list">${rows}</div>
+      <div class="launcher-foot">
+        <button data-open-settings>配置命令模板</button>
+        <button data-show-stats>使用统计</button>
+      </div>`;
+    $('popup-layer').appendChild(div);
+    const rect = anchorEl && typeof anchorEl.getBoundingClientRect === 'function'
+      ? anchorEl.getBoundingClientRect()
+      : { right: window.innerWidth - 16, bottom: 48 };
+    positionPopup(div, (rect.right || window.innerWidth - 16) - 340, (rect.bottom || 48) + 6);
+    div.addEventListener('click', (e) => {
+      if (e.target.closest('[data-close]')) {
+        closePopup();
+        return;
+      }
+      const launch = e.target.closest('[data-menu-launch]');
+      if (launch) {
+        closePopup();
+        post({ type: 'agent.launch', action: launch.dataset.menuLaunch });
+        return;
+      }
+      const copy = e.target.closest('[data-menu-copy]');
+      if (copy) {
+        closePopup();
+        post({ type: 'agent.launch', action: copy.dataset.menuCopy, copyOnly: true });
+        return;
+      }
+      if (e.target.closest('[data-open-settings]')) {
+        closePopup();
+        post({ type: 'launcher.openSettings' });
+        return;
+      }
+      if (e.target.closest('[data-show-stats]')) {
+        closePopup();
+        post({ type: 'launcher.showStats' });
+      }
+    });
+    state.popup = div;
+  }
+
   $('btn-refresh').onclick = () => post({ type: 'refresh' });
   $('btn-fit').onclick = () => fitView();
   $('btn-layout').onclick = () => {
     state.view.initialized = false;
     post({ type: 'layout', includeExternal: state.showExternalCanvas });
   };
-  $('btn-goal').onclick = () => post({ type: 'copy.goal' });
+  if ($('btn-agent')) {
+    $('btn-agent').onclick = () => openAgentMenu($('btn-agent'));
+  }
+  if ($('btn-goal')) {
+    $('btn-goal').onclick = () => post({ type: 'copy.goal' });
+  }
+  if ($('btn-collapse-prd')) {
+    $('btn-collapse-prd').onclick = () => setPaneCollapsed('prd', true);
+  }
+  if ($('btn-expand-prd')) {
+    $('btn-expand-prd').onclick = () => setPaneCollapsed('prd', false);
+  }
+  if ($('btn-collapse-diff')) {
+    $('btn-collapse-diff').onclick = () => setPaneCollapsed('diff', true);
+  }
+  if ($('btn-expand-diff')) {
+    $('btn-expand-diff').onclick = () => setPaneCollapsed('diff', false);
+  }
   $('btn-orch').onclick = () => post({
     type: 'open.session',
     sessionId: state.snap && state.snap.orchestrator ? state.snap.orchestrator.session_id : '',
@@ -2710,6 +2868,10 @@
       render();
     } else if (msg.type === 'source.added') {
       state.pendingSource = String(msg.id || '');
+    } else if (msg.type === 'launcher.stats') {
+      if (state.snap) {
+        state.snap.launcher = msg.data || {};
+      }
     } else if (msg.type === 'toast') {
       showToast(msg.message, 'info');
     } else if (msg.type === 'error') {
@@ -2721,6 +2883,7 @@
     if (!state.snap) {
       return;
     }
+    applyPaneCollapse();
     syncFilterControls();
     renderTop();
     renderSourceTabs();

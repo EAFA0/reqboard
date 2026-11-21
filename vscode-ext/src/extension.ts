@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 
 import { BoardPanel } from './boardPanel';
 import { ReqboardCLI } from './cli';
+import { LAUNCHER_ACTIONS, LAUNCHER_STATS_KEY, LauncherStatsMap } from './launcher';
 import { findRootUp, isReqboardRoot, normalizeRoot } from './util';
 
 interface SidebarNode {
@@ -234,6 +235,32 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('reqboard.refreshSidebar', () => sidebar.refresh()),
+    vscode.commands.registerCommand('reqboard.showLauncherStats', async () => {
+      const stats = context.globalState.get<LauncherStatsMap>(LAUNCHER_STATS_KEY, {});
+      const rows = LAUNCHER_ACTIONS.map((a) => {
+        const st = stats[a.id] || { total: 0, terminal: 0, clipboard: 0, lastAt: '' };
+        return {
+          label: `${a.label}`,
+          description: `${st.total} 次（终端 ${st.terminal} · 复制 ${st.clipboard}）`,
+          detail: st.lastAt ? `最近使用：${st.lastAt}` : '尚未使用',
+          total: st.total,
+        };
+      }).sort((a, b) => b.total - a.total);
+      const resetItem = {
+        label: '$(trash) 重置本地使用统计',
+        description: '',
+        detail: '清空跨工作区的发射器点击计数',
+        total: -1,
+      };
+      const picked = await vscode.window.showQuickPick([...rows, resetItem], {
+        title: 'ReqBoard 发射器本地使用统计（跨工作区）',
+        placeHolder: '按使用次数从高到低排序，用于评估各入口取舍',
+      });
+      if (picked && picked.total === -1) {
+        await context.globalState.update(LAUNCHER_STATS_KEY, {});
+        void vscode.window.showInformationMessage('ReqBoard: 发射器使用统计已重置');
+      }
+    }),
     vscode.commands.registerCommand('reqboard.copyText', async (text: string, msg?: string) => {
       if (!text) {
         return;

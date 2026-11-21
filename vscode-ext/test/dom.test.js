@@ -26,51 +26,64 @@ const BODY = `<!DOCTYPE html><html><body>
   <button id="btn-refresh"></button>
   <button id="btn-fit"></button>
   <button id="btn-layout"></button>
-  <button id="btn-goal"></button>
+  <button id="btn-agent"></button>
   <button id="btn-orch"></button>
 </header>
-<div class="pane-head prd-head">
-  <div id="source-tabs"></div>
-  <span id="coverage-badge" class="badge"></span>
-</div>
-<div id="prd-list"></div>
-<div id="dag-pane">
-  <button id="btn-add-node"></button>
-  <div id="external-dock">
-    <button id="btn-dock-toggle"></button>
-    <span id="dock-count"></span>
-    <button data-dock-type="all" class="active"></button>
-    <button data-dock-type="external"></button>
-    <button data-dock-type="todo"></button>
-    <button data-dock-filter="all" class="active"></button>
-    <button data-dock-filter="waiting"></button>
-    <button data-dock-filter="ready"></button>
-    <button id="btn-add-todo"></button>
-    <button id="btn-redline"></button>
-    <div id="dock-cards"></div>
-    <div id="redline-panel" class="hidden"></div>
-  </div>
-  <div id="external-focus" class="hidden"></div>
-  <div id="anchor-links" class="anchor-links hidden"></div>
-  <div id="dag-viewport">
-    <div id="dag-world">
-      <svg id="dag-edges"></svg>
-      <div id="dag-nodes"></div>
+<main id="columns">
+  <section id="prd-pane" class="pane">
+    <button id="btn-expand-prd" class="pane-collapsed-rail"></button>
+    <div class="pane-head prd-head">
+      <div id="source-tabs"></div>
+      <span id="coverage-badge" class="badge"></span>
+      <button id="btn-collapse-prd"></button>
     </div>
-    <div id="dag-hint"></div>
-  </div>
-</div>
-<div id="diff-filter">
-  <input type="checkbox" id="df-exclude-tests" checked>
-  <input id="df-include">
-  <input id="df-exclude">
-  <button id="df-apply"></button>
-  <button id="df-reset"></button>
-  <input id="df-search">
-  <span id="df-ignored"></span>
-</div>
-<div id="diff-body"></div>
-<div id="sel-node-badge"></div>
+    <div id="prd-list"></div>
+  </section>
+  <section id="dag-pane" class="pane">
+    <button id="btn-add-node"></button>
+    <div id="external-dock">
+      <button id="btn-dock-toggle"></button>
+      <span id="dock-count"></span>
+      <button data-dock-type="all" class="active"></button>
+      <button data-dock-type="external"></button>
+      <button data-dock-type="todo"></button>
+      <button data-dock-filter="all" class="active"></button>
+      <button data-dock-filter="waiting"></button>
+      <button data-dock-filter="ready"></button>
+      <button id="btn-add-todo"></button>
+      <button id="btn-redline"></button>
+      <div id="dock-cards"></div>
+      <div id="redline-panel" class="hidden"></div>
+    </div>
+    <div id="external-focus" class="hidden"></div>
+    <div id="anchor-links" class="anchor-links hidden"></div>
+    <div id="dag-viewport">
+      <div id="dag-world">
+        <svg id="dag-edges"></svg>
+        <div id="dag-nodes"></div>
+      </div>
+      <div id="dag-hint"></div>
+    </div>
+  </section>
+  <section id="diff-pane" class="pane">
+    <button id="btn-expand-diff" class="pane-collapsed-rail"></button>
+    <div class="pane-head">
+      <span>Diff / Review</span>
+      <span id="sel-node-badge"></span>
+      <button id="btn-collapse-diff"></button>
+    </div>
+    <div id="diff-filter">
+      <input type="checkbox" id="df-exclude-tests" checked>
+      <input id="df-include">
+      <input id="df-exclude">
+      <button id="df-apply"></button>
+      <button id="df-reset"></button>
+      <input id="df-search">
+      <span id="df-ignored"></span>
+    </div>
+    <div id="diff-body"></div>
+  </section>
+</main>
 <div id="popup-layer"></div>
 <div id="toast" class="toast hidden"></div>
 </body></html>`;
@@ -183,11 +196,12 @@ const snapshot = {
   },
 };
 
-function boot(data) {
+function boot(data, initialUiState) {
   const { document, window } = parseHTML(BODY);
   // Each test gets its own snapshot: layout/delete interactions mutate positions.
   const snap = JSON.parse(JSON.stringify(data || snapshot));
   const messages = [];
+  let uiState = initialUiState ? JSON.parse(JSON.stringify(initialUiState)) : undefined;
   const listeners = {};
   const fakeWindow = {
     addEventListener(name, fn) {
@@ -199,7 +213,11 @@ function boot(data) {
   const context = {
     document,
     window: fakeWindow,
-    acquireVsCodeApi: () => ({ postMessage: (m) => messages.push(m) }),
+    acquireVsCodeApi: () => ({
+      postMessage: (m) => messages.push(m),
+      getState: () => uiState,
+      setState: (s) => { uiState = s; },
+    }),
     setTimeout,
     clearTimeout,
     console,
@@ -210,7 +228,7 @@ function boot(data) {
   for (const fn of listeners.message || []) {
     fn({ data: { type: 'snapshot', data: snap } });
   }
-  return { document, window, messages };
+  return { document, window, messages, getUiState: () => uiState };
 }
 
 function click(window, el) {
@@ -783,6 +801,79 @@ test('selected node diff renders above global orphan alerts with attributed stat
   assert.strictEqual(bindingEl.dataset.line, '42');
   assert.ok(bindingEl.textContent.includes('+18'), 'attributed +added missing');
   assert.ok(bindingEl.textContent.includes('-3'), 'attributed -deleted missing');
+});
+
+test('agent launcher menu dispatches workspace actions, copy-only, orphan audit and node work/fix', () => {
+  const snap = diffSnapshot();
+  snap.launcher = { configured: true, counts: { push_goal: 4, review_simplify: 2 } };
+  snap.dag.nodes[0].review_notes = [{ id: 'rn-1', status: 'open', comment: 'fix nil check' }];
+  const { document, window, messages } = boot(snap);
+
+  click(window, document.getElementById('btn-agent'));
+  const popup = document.querySelector('.launcher-popup');
+  assert.ok(popup, 'launcher menu did not open');
+  assert.ok(popup.textContent.includes('4 次'), 'usage count badge missing');
+  assert.ok(popup.textContent.includes('2 次'), 'second usage count badge missing');
+
+  click(window, popup.querySelector('[data-menu-launch="review_simplify"]'));
+  let msg = messages.pop();
+  assert.strictEqual(msg.type, 'agent.launch');
+  assert.strictEqual(msg.action, 'review_simplify');
+  assert.strictEqual(msg.copyOnly, undefined);
+
+  click(window, document.getElementById('btn-agent'));
+  click(window, document.querySelector('[data-menu-copy="push_goal"]'));
+  msg = messages.pop();
+  assert.strictEqual(msg.type, 'agent.launch');
+  assert.strictEqual(msg.action, 'push_goal');
+  assert.strictEqual(msg.copyOnly, true);
+
+  // Orphan header quick audit button does not collapse the bucket.
+  const orphanBtn = document.querySelector('#diff-body .bucket-action-btn[data-launch-action="audit_orphan"]');
+  assert.ok(orphanBtn, 'orphan quick audit button missing');
+  click(window, orphanBtn);
+  msg = messages.pop();
+  assert.strictEqual(msg.type, 'agent.launch');
+  assert.strictEqual(msg.action, 'audit_orphan');
+  assert.ok(!document.querySelector('#diff-body .bucket-body').classList.contains('hidden'), 'bucket collapsed on audit click');
+
+  // Selected node with open review note dispatches node_fix; without open notes dispatches node_work.
+  click(window, document.querySelector('.prd-block[data-anchor="p-main"]'));
+  const fixBtn = document.querySelector('#diff-body [data-launch-node="rb-a"]');
+  assert.ok(fixBtn, 'node launch button missing');
+  assert.strictEqual(fixBtn.dataset.launchAction, 'node_fix');
+  click(window, fixBtn);
+  msg = messages.pop();
+  assert.strictEqual(msg.type, 'agent.launch');
+  assert.strictEqual(msg.action, 'node_fix');
+  assert.strictEqual(msg.nodeId, 'rb-a');
+});
+
+test('left PRD and right Diff panes collapse/expand, persist state, and PRD anchor auto-expands PRD pane', () => {
+  const { document, window, getUiState } = boot(undefined, { prdCollapsed: false, diffCollapsed: false });
+  const cols = document.getElementById('columns');
+  const prd = document.getElementById('prd-pane');
+  const diff = document.getElementById('diff-pane');
+
+  click(window, document.getElementById('btn-collapse-prd'));
+  assert.ok(cols.classList.contains('prd-collapsed'));
+  assert.ok(prd.classList.contains('collapsed'));
+  assert.strictEqual(getUiState().prdCollapsed, true);
+
+  click(window, document.getElementById('btn-collapse-diff'));
+  assert.ok(cols.classList.contains('diff-collapsed'));
+  assert.ok(diff.classList.contains('collapsed'));
+  assert.strictEqual(getUiState().diffCollapsed, true);
+
+  // Clicking a PRD anchor chip on canvas auto-expands the collapsed PRD pane while keeping Diff collapsed.
+  click(window, document.querySelector('.node-anchor-chip[data-anchor-chip="meeting-review:1-1"]'));
+  assert.ok(!cols.classList.contains('prd-collapsed'), 'PRD pane should auto-expand on anchor jump');
+  assert.ok(cols.classList.contains('diff-collapsed'), 'Diff pane should stay collapsed');
+
+  click(window, document.getElementById('btn-expand-diff'));
+  assert.ok(!cols.classList.contains('diff-collapsed'));
+  assert.ok(!diff.classList.contains('collapsed'));
+  assert.strictEqual(getUiState().diffCollapsed, false);
 });
 
 console.log('all webview DOM tests passed');

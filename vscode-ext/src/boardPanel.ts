@@ -4,6 +4,15 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 
 import { CLIError, ReqboardCLI, gitShow } from './cli';
+import {
+  LAUNCHER_STATS_KEY,
+  LauncherStatsMap,
+  buildLaunchCommand,
+  findLauncherAction,
+  recordLauncherUsage,
+  renderPrompt,
+  summarizeLauncherCounts,
+} from './launcher';
 import { findSymbolLine } from './util';
 import { renderHTML } from './webview';
 
@@ -127,7 +136,7 @@ export class BoardPanel {
         return;
       }
       this.snapshot = res.data;
-      this.post({ type: 'snapshot', data: res.data });
+      this.post({ type: 'snapshot', data: { ...res.data, launcher: this.launcherSummary() } });
     } catch (e: any) {
       this.post({ type: 'error', message: this.describeError(e) });
     } finally {
@@ -489,13 +498,89 @@ export class BoardPanel {
         await this.openSession(msg.sessionId);
         return;
       case 'copy.goal':
-        await vscode.env.clipboard.writeText(
-          '/goal 作为 ReqBoard 协调者（只调度不写业务代码），循环执行 `reqboard dispatch` 并按 P0→P1→P2 并发扇出单节点 Worker：每个 Worker 只领 1 个 node_id，走 claim → 改码/包内单测（不跑全仓单测）→ bind（仅挂生产 impl 与手写 mock，不绑单测）→ check --node → 能完结就 done，暂卡门禁则显式 `node update --status implemented` 释放租约，遇阻则 `node fail`；每波回收后做整仓校验并继续 dispatch，直到返回 QUIESCENT 输出分类阻塞账单并停止。'
-        );
-        this.post({ type: 'toast', level: 'info', message: '已复制 /goal 推进指令' });
+        await this.launchAgent({ action: 'push_goal', copyOnly: true });
+        return;
+      case 'agent.launch':
+        await this.launchAgent(msg);
+        return;
+      case 'launcher.openSettings':
+        await vscode.commands.executeCommand('workbench.action.openSettings', 'reqboard.agentCommand');
+        return;
+      case 'launcher.showStats':
+        await vscode.commands.executeCommand('reqboard.showLauncherStats');
         return;
       default:
         return;
+    }
+  }
+
+  private launcherSummary(): { configured: boolean; counts: Record<string, number> } {
+    const cfg = vscode.workspace.getConfiguration('reqboard');
+    const configured = Boolean((cfg.get<string>('agentCommand') || '').trim());
+    const stats = this.context.globalState.get<LauncherStatsMap>(LAUNCHER_STATS_KEY, {});
+    return {
+      configured,
+      counts: summarizeLauncherCounts(stats),
+    };
+  }
+
+  private async launchAgent(msg: any): Promise<void> {
+    const actionId = String(msg.action || '');
+    const meta = findLauncherAction(actionId);
+    if (!meta) {
+      this.post({ type: 'error', message: `未知发射动作：${actionId}` });
+      return;
+    }
+    const nodeId = msg.nodeId ? String(msg.nodeId) : undefined;
+    const nodeTitle = msg.nodeTitle ? String(msg.nodeTitle) : undefined;
+    if (meta.scope === 'node' && !nodeId) {
+      this.post({ type: 'error', message: '请先在画布选中一个节点' });
+      return;
+    }
+    const cfg = vscode.workspace.getConfiguration('reqboard');
+    const overrides = cfg.get<Record<string, string>>('agentPrompts') || {};
+    const prompt = renderPrompt(actionId, {
+      nodeId,
+      nodeTitle,
+      root: this.root,
+      overrides,
+    });
+    const cmdTemplate = (cfg.get<string>('agentCommand') || '').trim();
+    const copyOnly = Boolean(msg.copyOnly);
+    const prevStats = this.context.globalState.get<LauncherStatsMap>(LAUNCHER_STATS_KEY, {});
+
+    if (!copyOnly && cmdTemplate) {
+      const cmdLine = buildLaunchCommand(cmdTemplate, prompt, { nodeId, root: this.root });
+      const termName = nodeId ? `ReqBoard: ${meta.label} (${nodeId})` : `ReqBoard: ${meta.label}`;
+      const term = vscode.window.createTerminal({ name: termName, cwd: this.root });
+      term.show(false);
+      term.sendText(cmdLine, true);
+      const nextStats = recordLauncherUsage(prevStats, actionId, 'terminal');
+      await this.context.globalState.update(LAUNCHER_STATS_KEY, nextStats);
+      this.post({ type: 'launcher.stats', data: this.launcherSummary() });
+      this.post({ type: 'toast', level: 'info', message: `已发射终端：${meta.label}` });
+      return;
+    }
+
+    await vscode.env.clipboard.writeText(prompt);
+    const nextStats = recordLauncherUsage(prevStats, actionId, 'clipboard');
+    await this.context.globalState.update(LAUNCHER_STATS_KEY, nextStats);
+    this.post({ type: 'launcher.stats', data: this.launcherSummary() });
+    if (copyOnly) {
+      this.post({ type: 'toast', level: 'info', message: `已复制指令：${meta.label}` });
+      return;
+    }
+    this.post({
+      type: 'toast',
+      level: 'info',
+      message: `未配置 reqboard.agentCommand，已复制「${meta.label}」指令到剪贴板`,
+    });
+    const pick = await vscode.window.showInformationMessage(
+      `未配置 reqboard.agentCommand，已将「${meta.label}」指令复制到剪贴板。配置命令模板后可直接拉起终端。`,
+      '去配置 agentCommand'
+    );
+    if (pick === '去配置 agentCommand') {
+      await vscode.commands.executeCommand('workbench.action.openSettings', 'reqboard.agentCommand');
     }
   }
 
