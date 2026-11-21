@@ -29,34 +29,34 @@ export const LAUNCHER_ACTIONS: LauncherActionMeta[] = [
   {
     id: 'push_goal',
     label: '推进完整任务',
-    desc: '按 reqboard dispatch 持续推进当前可执行节点直至闭环',
+    desc: '按 reqboard dispatch 并发扇出推进可执行节点直至闭环',
     scope: 'workspace',
     defaultPrompt:
-      '作为 ReqBoard 协调者，循环执行 reqboard dispatch 按 P0→P1→P2 推进当前可执行节点（单节点 claim→改码/包内单测→bind 仅生产与手写 mock→check --node→done 或 implemented 释放租约），直到返回 QUIESCENT 输出阻塞账单。',
+      '作为 ReqBoard 协调者（只调度与汇总，不自己串行写业务代码），循环执行 reqboard dispatch 按 P0→P1→P2 并发扇出多个单节点子代理：每个子代理只领 1 个 node_id，走 claim→改码/包内单测（不跑全仓单测）→bind 仅生产与手写 mock→check --node→满足门禁则 done 否则显式更新状态为 implemented 释放租约；每波回收后做整仓校验并继续 dispatch，直到返回 QUIESCENT 输出阻塞账单。',
   },
   {
     id: 'review_simplify',
     label: 'Review 与代码精简',
-    desc: '对照主 PRD、红线、bindings 与 mock 债做代码审查和冗余精简',
+    desc: '按仓/模块并发只读审查 PRD、bindings、Orphan 与冗余代码',
     scope: 'workspace',
     defaultPrompt:
-      '请对照当前工作区 .reqboard/prd.md、补充来源、节点 bindings、Orphan Diff、To-Delete 与 Mock 债，全面 Review 本分支多仓改动：识别冗余、越界或重复代码并先输出精简方案，待我确认后再修改与清理。',
+      '请对照当前工作区 .reqboard/prd.md、补充来源、节点 bindings、Orphan Diff、To-Delete 与 Mock 债，全面 Review 本分支多仓改动：按仓库或模块并发扇出多个只读子代理分片核查，主代理统一汇总冗余、越界与重复代码并先输出精简方案，待我确认后再修改与清理。',
   },
   {
     id: 'audit_orphan',
     label: '审计 Orphan / 残骸 Diff',
-    desc: '逐条分类未归属改动（漏绑 / 越界 / 同事合入 / 漏建节点）',
+    desc: '按仓/文件并发只读分类未归属改动，先汇报再动手',
     scope: 'workspace',
     defaultPrompt:
-      '请运行 reqboard check --json 逐条审计所有 Orphan Diff 与 To-Delete，结合 git diff 与节点说明归类为【确凿漏绑 / 疑似越界冗余 / 同事合入或生成文件 / DAG 漏建节点】，严禁为了清零乱绑或未经确认删代码，先输出分类清单等我拍板。',
+      '请先运行 reqboard check --json 获取所有 Orphan Diff 与 To-Delete，按仓库或文件分片并发扇出只读子代理核查 git diff 与节点归属，主代理统一归类为【确凿漏绑 / 疑似越界冗余 / 同事合入或生成文件 / DAG 漏建节点】；严禁为了清零乱绑或未经确认删代码，先输出分类清单等我拍板。',
   },
   {
     id: 'plan_dag',
     label: '规划 / 校准 DAG',
-    desc: '结合代码库与 PRD 建图、校准 stale 节点，并按门禁同步已实现节点的 done 状态',
+    desc: '并发调研多仓代码与 PRD，串行收口 DAG 与节点 done 状态',
     scope: 'workspace',
     defaultPrompt:
-      '请结合当前 .reqboard/prd.md、补充来源与现有代码库，按 ReqBoard 规范规划或校准 DAG（反碎化、无伪硬边、区分 todo 与真实外部依赖、核对 stale 节点）；若已有实现代码，顺便按真实代码与 bindings 核验每个节点并同步状态：通过 4 道门禁则执行 reqboard done，仍受外部/mock/todo/人工批注阻塞则标记 implemented 并列明缺口，先跑 Critic 自审后再汇报。',
+      '请结合当前 .reqboard/prd.md、补充来源与现有代码库，按 ReqBoard 规范规划或校准 DAG：代码调研与已有节点核验阶段按仓库/模块并发扇出只读子代理加速，最终由主代理串行收口写入 .reqboard/（反碎化、无伪硬边、区分 todo 与真实外部依赖、核对 stale 节点）；若已有实现代码，同步核验 bindings 与 4 道门禁，达标则 reqboard done，受外部/mock/todo/人工批注阻塞则标 implemented 并列明缺口，跑独立 Critic 自审后再汇报。',
   },
   {
     id: 'node_work',
