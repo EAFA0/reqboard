@@ -407,10 +407,11 @@ func LayoutWith(dag *model.DAG, includeExternal bool) {
 	}
 }
 
-// layoutFull lays out the complete graph. Prerequisite nodes (external /
-// collaborator / todo) are forced into Column 0; mine nodes are layered after
-// their blocking upstreams. out_of_scope nodes stay in a compact shelf below
-// the flow so they never add phantom columns.
+// layoutFull lays out the complete graph strictly left-to-right. Zero-indegree
+// prerequisites (external / collaborator / todo) naturally sit in Column 0,
+// while downstream external/collaborator consumers sit to the right of the mine
+// nodes they depend on (eliminating visual U-turn back-edges). out_of_scope
+// nodes stay in a compact shelf below the flow so they never add phantom columns.
 func layoutFull(dag *model.DAG, order []string) {
 	isSource := func(n *model.Node) bool {
 		return model.IsPrerequisiteScope(n.Scope)
@@ -432,10 +433,6 @@ func layoutFull(dag *model.DAG, order []string) {
 		if n == nil || !inFlow[id] {
 			continue
 		}
-		if isSource(n) {
-			depth[id] = 0
-			continue
-		}
 		for _, e := range dag.InEdges(id) {
 			if !model.BlockingEdge(e.Kind) || !inFlow[e.From] {
 				continue
@@ -445,6 +442,7 @@ func layoutFull(dag *model.DAG, order []string) {
 			}
 		}
 	}
+	pinMilestoneDepths(dag, inFlow, depth)
 	byDepth := map[int][]*model.Node{}
 	maxDepth, maxCount := 0, 1
 	for _, n := range dag.Nodes {

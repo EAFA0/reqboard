@@ -266,18 +266,16 @@
       return;
     }
 
-    // Full graph: external / collaborator / todo sources sit in Column 0 and
-    // flow naturally into the left-to-right topology.
+    // Full graph: zero-indegree prerequisites sit in Column 0, while downstream
+    // external/collaborator consumers sit to the right of their upstreams.
     const flow = nodes.filter((n) => !isRedline(n));
     const depth = computeDepth(flow.map((n) => n.id));
     for (const n of flow) {
-      if (isSource(n)) {
-        depth[n.id] = 0;
-      } else if (!(n.id in depth)) {
+      if (!(n.id in depth)) {
         depth[n.id] = 0;
       }
     }
-    pinMilestones(flow.filter((n) => !isSource(n)), depth);
+    pinMilestones(flow, depth);
     const rank = (n) => isSource(n) ? 0 : (n.status === 'proposed' ? 1 : 2);
     const groups = {};
     let maxCount = 1;

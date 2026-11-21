@@ -260,6 +260,30 @@ func TestLayoutKeepsNaturalDepthAndPinsMilestones(t *testing.T) {
 	}
 }
 
+func TestLayoutFullPlacesDownstreamCollaboratorToTheRight(t *testing.T) {
+	d := model.NewDAG("x")
+	extUp := &model.Node{ID: "ext-up", Title: "Upstream API", Scope: model.ScopeExternal, Status: model.StatusPending}
+	mine := &model.Node{ID: "m1", Title: "Core Retry", Scope: model.ScopeMine, Status: model.StatusPending}
+	collabDown := &model.Node{ID: "c-down", Title: "Downstream Notify", Scope: model.ScopeCollaborator, Status: model.StatusPending}
+	d.AddNode(extUp)
+	d.AddNode(mine)
+	d.AddNode(collabDown)
+	d.AddEdge(&model.Edge{ID: "e1", From: "ext-up", To: "m1", Kind: model.EdgeHard})
+	d.AddEdge(&model.Edge{ID: "e2", From: "m1", To: "c-down", Kind: model.EdgeHard})
+
+	LayoutWith(d, true)
+
+	if extUp.Position.X != 80 {
+		t.Fatalf("zero-indegree upstream external should be in Column 0, got x=%.0f", extUp.Position.X)
+	}
+	if mine.Position.X <= extUp.Position.X {
+		t.Fatalf("mine x=%.0f should be right of ext-up x=%.0f", mine.Position.X, extUp.Position.X)
+	}
+	if collabDown.Position.X <= mine.Position.X {
+		t.Fatalf("downstream collaborator x=%.0f should be right of mine x=%.0f (no U-turn)", collabDown.Position.X, mine.Position.X)
+	}
+}
+
 func TestLayoutFullPutsAllPrerequisiteScopesInColumnZero(t *testing.T) {
 	d := model.NewDAG("x")
 	mk := func(id, scope string) *model.Node {
