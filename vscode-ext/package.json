@@ -19,17 +19,71 @@
     "review"
   ],
   "activationEvents": [
-    "onCommand:reqboard.openBoard"
+    "onView:reqboard.sidebar",
+    "onCommand:reqboard.openBoard",
+    "onCommand:reqboard.initWorkspace",
+    "onCommand:reqboard.openOtherBoard",
+    "workspaceContains:.reqboard/dag.json"
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "reqboard",
+          "title": "ReqBoard",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "reqboard": [
+        {
+          "id": "reqboard.sidebar",
+          "name": "需求看板"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "reqboard.openBoard",
-        "title": "ReqBoard: Open Board",
-        "category": "ReqBoard"
+        "title": "Open Board",
+        "category": "ReqBoard",
+        "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "reqboard.openOtherBoard",
+        "title": "Open Other Workspace...",
+        "category": "ReqBoard",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "reqboard.initWorkspace",
+        "title": "Initialize Workspace",
+        "category": "ReqBoard",
+        "icon": "$(add)"
+      },
+      {
+        "command": "reqboard.refreshSidebar",
+        "title": "Refresh",
+        "category": "ReqBoard",
+        "icon": "$(refresh)"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "reqboard.openBoard",
+          "when": "view == reqboard.sidebar",
+          "group": "navigation@1"
+        },
+        {
+          "command": "reqboard.refreshSidebar",
+          "when": "view == reqboard.sidebar",
+          "group": "navigation@2"
+        }
+      ]
+    },
     "configuration": {
       "title": "ReqBoard",
       "properties": {
