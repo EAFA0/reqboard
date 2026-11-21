@@ -1,0 +1,67 @@
+{
+  "name": "reqboard-vscode",
+  "displayName": "ReqBoard",
+  "description": "三栏需求看板：PRD 锚点覆盖 / 左细右粗 DAG / 多仓 Diff 归因与 Review 闭环",
+  "version": "0.1.3",
+  "publisher": "eafa0",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.97.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "reqboard",
+    "prd",
+    "dag",
+    "diff",
+    "review"
+  ],
+  "activationEvents": [
+    "onCommand:reqboard.openBoard"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "reqboard.openBoard",
+        "title": "ReqBoard: Open Board",
+        "category": "ReqBoard"
+      }
+    ],
+    "configuration": {
+      "title": "ReqBoard",
+      "properties": {
+        "reqboard.cliPath": {
+          "type": "string",
+          "default": "reqboard",
+          "description": "reqboard CLI 路径。默认从 PATH 查找，并自动回退到 ~/.local/bin/reqboard 与仓库 bin/reqboard。"
+        },
+        "reqboard.revealSymbolAfterOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "调用 focused-git 打开 Diff 后，尽量把光标定位到目标符号所在行。"
+        },
+        "reqboard.sessionLinkTemplate": {
+          "type": "string",
+          "default": "",
+          "description": "Orchestrator session 的深度链接模板，{session} 会被替换为 session_id。留空则只弹出提示，不打开外部链接。例如可配置为 myagent://session/{session} 或你的 AI agent CLI 的 session 深链。"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "npm run compile && node test/basic.test.js && node test/dom.test.js",
+    "package": "npm run compile && vsce package --no-dependencies --allow-missing-repository -o reqboard-vscode-0.1.3.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/vscode": "^1.97.0",
+    "@vscode/vsce": "^3.9.0",
+    "linkedom": "^0.18.15",
+    "typescript": "^5.9.0"
+  }
+}

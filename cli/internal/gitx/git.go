@@ -1,0 +1,236 @@
+// Package gitx runs real git diffs and exposes hunks for attribution.
+package gitx
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+// Hunk is one unified diff hunk.
+type Hunk struct {
+	OldStart int      `json:"old_start"`
+	OldCount int      `json:"old_count"`
+	NewStart int      `json:"new_start"`
+	NewCount int      `json:"new_count"`
+	Header   string   `json:"header"`
+	Lines    []string `json:"lines,omitempty"`
+}
+
+// FileDiff is the change set of one file relative to the base ref.
+type FileDiff struct {
+	Path      string `json:"path"`
+	OldPath   string `json:"old_path,omitempty"`
+	Status    string `json:"status"` // added | modified | deleted | untracked
+	Added     int    `json:"added"`
+	Deleted   int    `json:"deleted"`
+	Binary    bool   `json:"binary,omitempty"`
+	Untracked bool   `json:"untracked,omitempty"`
+	Hunks     []Hunk `json:"hunks,omitempty"`
+}
+
+var hunkRe = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$`)
+
+// Collect returns all working-tree changes of a repo against baseRef, including
+// untracked files. Generated files are NOT filtered here (the audit layer does
+// that so callers can see the raw set).
+func Collect(repoPath, baseRef string) ([]FileDiff, error) {
+	if baseRef == "" {
+		baseRef = "HEAD"
+	}
+	out, err := run(repoPath, "diff", "--unified=0", "--no-color", "--no-ext-diff", "--no-prefix", baseRef, "--")
+	if err != nil {
+		return nil, fmt.Errorf("git diff in %s: %w", repoPath, err)
+	}
+	files := parseDiff(out)
+
+	untracked, err := run(repoPath, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("git ls-files in %s: %w", repoPath, err)
+	}
+	for _, p := range strings.Split(untracked, "\x00") {
+		if p == "" {
+			continue
+		}
+		abs := filepath.Join(repoPath, p)
+		data, err := os.ReadFile(abs)
+		if err != nil {
+			continue
+		}
+		if bytes.IndexByte(data, 0) >= 0 {
+			files = append(files, FileDiff{Path: p, Status: "untracked", Untracked: true, Binary: true})
+			continue
+		}
+		n := countLines(data)
+		files = append(files, FileDiff{Path: p, Status: "untracked", Untracked: true, Added: n})
+	}
+	return files, nil
+}
+
+func countLines(data []byte) int {
+	if len(data) == 0 {
+		return 0
+	}
+	n := bytes.Count(data, []byte("\n"))
+	if data[len(data)-1] != '\n' {
+		n++
+	}
+	return n
+}
+
+func parseDiff(out string) []FileDiff {
+	var files []FileDiff
+	var cur *FileDiff
+	var hunk *Hunk
+	finalizeHunk := func() {
+		if cur != nil && hunk != nil {
+			cur.Hunks = append(cur.Hunks, *hunk)
+			hunk = nil
+		}
+	}
+	finalizeFile := func() {
+		finalizeHunk()
+		if cur == nil {
+			return
+		}
+		if cur.Path == "" {
+			cur.Path = cur.OldPath
+		}
+		if cur.Path == "" {
+			cur = nil
+			return
+		}
+		if cur.Status == "" {
+			if cur.OldPath == "" || cur.OldPath == cur.Path {
+				cur.Status = "modified"
+			}
+		}
+		files = append(files, *cur)
+		cur = nil
+	}
+
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "diff --git "):
+			finalizeFile()
+			cur = &FileDiff{Hunks: []Hunk{}}
+		case cur == nil:
+			continue
+		case strings.HasPrefix(line, "new file mode"):
+			cur.Status = "added"
+		case strings.HasPrefix(line, "deleted file mode"):
+			cur.Status = "deleted"
+		case strings.HasPrefix(line, "Binary files ") || strings.HasPrefix(line, "GIT binary patch"):
+			cur.Binary = true
+		case strings.HasPrefix(line, "--- "):
+			p := strings.TrimSpace(strings.TrimPrefix(line, "--- "))
+			if p != "/dev/null" {
+				cur.OldPath = cleanPath(p)
+			}
+		case strings.HasPrefix(line, "+++ "):
+			p := strings.TrimSpace(strings.TrimPrefix(line, "+++ "))
+			if p == "/dev/null" {
+				cur.Status = "deleted"
+			} else {
+				cur.Path = cleanPath(p)
+			}
+		case strings.HasPrefix(line, "@@ "):
+			finalizeHunk()
+			m := hunkRe.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			os, _ := strconv.Atoi(m[1])
+			oc := 1
+			if m[2] != "" {
+				oc, _ = strconv.Atoi(m[2])
+			}
+			ns, _ := strconv.Atoi(m[3])
+			nc := 1
+			if m[4] != "" {
+				nc, _ = strconv.Atoi(m[4])
+			}
+			hunk = &Hunk{OldStart: os, OldCount: oc, NewStart: ns, NewCount: nc, Header: line, Lines: []string{}}
+		case hunk != nil:
+			hunk.Lines = append(hunk.Lines, line)
+			if strings.HasPrefix(line, "+") {
+				cur.Added++
+			} else if strings.HasPrefix(line, "-") {
+				cur.Deleted++
+			}
+		}
+	}
+	finalizeFile()
+	return files
+}
+
+func cleanPath(p string) string {
+	p = strings.TrimSpace(p)
+	if i := strings.IndexByte(p, '\t'); i >= 0 {
+		p = p[:i]
+	}
+	if strings.HasPrefix(p, `"`) && strings.HasSuffix(p, `"`) {
+		if u, err := strconv.Unquote(p); err == nil {
+			p = u
+		}
+	}
+	p = strings.TrimPrefix(p, "a/")
+	p = strings.TrimPrefix(p, "b/")
+	return filepath.ToSlash(p)
+}
+
+func run(repoPath string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{"-C", repoPath}, args...)...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg != "" {
+			return "", fmt.Errorf("%v: %s", err, msg)
+		}
+		return "", err
+	}
+	return string(out), nil
+}
+
+// ShowFile returns the content of a file at a ref.
+func ShowFile(repoPath, ref, path string) ([]byte, error) {
+	out, err := run(repoPath, "show", ref+":"+path)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(out), nil
+}
+
+// DiffFile returns hunks for one file at a chosen context size.
+func DiffFile(repoPath, baseRef, path string, context int) ([]Hunk, error) {
+	if context < 0 {
+		context = 0
+	}
+	out, err := run(repoPath, "diff", fmt.Sprintf("--unified=%d", context), "--no-color", "--no-ext-diff", "--no-prefix", baseRef, "--", path)
+	if err != nil {
+		return nil, err
+	}
+	files := parseDiff(out)
+	if len(files) == 0 {
+		return []Hunk{}, nil
+	}
+	return files[0].Hunks, nil
+}
+
+// IsRepo reports whether path is a git worktree.
+func IsRepo(path string) bool {
+	_, err := os.Stat(filepath.Join(path, ".git"))
+	if err == nil {
+		return true
+	}
+	// worktrees / submodules may use a .git file; git rev-parse is authoritative.
+	cmd := exec.Command("git", "-C", path, "rev-parse", "--git-dir")
+	return cmd.Run() == nil
+}

@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "leases": [],
+  "bindings": [
+    {
+      "id": "bd-01",
+      "node_id": "rb-core",
+      "repo": "order_api",
+      "file": "service/visibility.go",
+      "granularity": "symbol",
+      "symbol": "BuildVisibilityFilter",
+      "role": "impl",
+      "why": "PRD 3.1 可见性基础过滤：排除未就绪状态",
+      "session_id": "01a1c0de-core",
+      "bound_at": "2026-11-19T18:20:00+08:00"
+    },
+    {
+      "id": "bd-02",
+      "node_id": "rb-vis",
+      "repo": "order_api",
+      "file": "handler/order_query.go",
+      "granularity": "symbol",
+      "symbol": "SearchOrders",
+      "role": "impl",
+      "why": "PRD 3.1.1 线下单待支付前对客不可见，对客查询入口透传过滤条件",
+      "session_id": "01a1vis-session",
+      "bound_at": "2026-11-20T10:35:00+08:00"
+    },
+    {
+      "id": "bd-03",
+      "node_id": "rb-create",
+      "repo": "order_api",
+      "file": "handler/order_create.go",
+      "granularity": "symbol",
+      "symbol": "CreateOrder",
+      "role": "impl",
+      "why": "PRD 3.2 创单必须校验商品与库存",
+      "session_id": "01a1create-session",
+      "bound_at": "2026-11-20T11:15:00+08:00"
+    },
+    {
+      "id": "bd-04",
+      "node_id": "rb-precheck",
+      "repo": "order_service",
+      "file": "internal/precheck/precheck.go",
+      "granularity": "symbol",
+      "symbol": "PrecheckOrder",
+      "role": "impl",
+      "why": "PRD 3.2 下单前置校验依赖 AuthService 权限结果",
+      "session_id": "01a1precheck-session",
+      "bound_at": "2026-11-20T13:40:00+08:00"
+    },
+    {
+      "id": "bd-05",
+      "node_id": "rb-query",
+      "repo": "order_api",
+      "file": "handler/order_query.go",
+      "granularity": "symbol",
+      "symbol": "GetOrder",
+      "role": "impl",
+      "why": "PRD 3.2 订单列表查询需要透传可见性开关",
+      "session_id": "01a1query-session",
+      "bound_at": "2026-11-20T14:50:00+08:00"
+    },
+    {
+      "id": "bd-06",
+      "node_id": "rb-legacy",
+      "repo": "order_api",
+      "file": "service/visibility.go",
+      "granularity": "symbol",
+      "symbol": "LegacyVisibilityScope",
+      "role": "impl",
+      "why": "旧版按支付渠道白名单判断（已废弃，保留 binding 用于残骸检测）",
+      "session_id": "01a1c0de-core",
+      "bound_at": "2026-11-19T18:25:00+08:00"
+    }
+  ]
+}
