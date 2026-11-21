@@ -192,6 +192,23 @@ export class BoardPanel {
         await this.exec(args, 'Diff 过滤已写入 config.json');
         return;
       }
+      case 'todo.add': {
+        const title = String(msg.title || '').trim();
+        if (!title) {
+          this.post({ type: 'error', message: 'TODO 标题不能为空' });
+          return;
+        }
+        const args = ['todo', 'add', title, '--kind', String(msg.kind || 'other'), '--actor', 'human'];
+        if (msg.note) {
+          args.push('--note', String(msg.note));
+        }
+        const blocks: string[] = Array.isArray(msg.blocks) ? msg.blocks.map(String).filter(Boolean) : [];
+        if (blocks.length) {
+          args.push('--blocks', blocks.join(','));
+        }
+        await this.exec(args, blocks.length ? `TODO 已创建并阻塞 ${blocks.length} 个下游节点` : 'TODO 已创建');
+        return;
+      }
       case 'node.create': {
         const args = ['node', 'add', '--title', String(msg.title || '新功能点'), '--actor', 'human'];
         if (msg.scope) {
@@ -353,7 +370,7 @@ export class BoardPanel {
         if (msg.includeExternal) {
           args.push('--include-external');
         }
-        await this.exec(args, msg.includeExternal ? '全图模式：外部依赖已排到最左列' : '已按左细右粗重新排版');
+        await this.exec(args, msg.includeExternal ? '全图模式：外部/协作者/TODO 已排到最左列' : '已按自然拓扑深度重新排版');
         return;
       }
       case 'done': {

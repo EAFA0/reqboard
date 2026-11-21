@@ -55,7 +55,7 @@ func runPlan(a *Args, rest []string) *Error {
 		sb.WriteString(fmt.Sprintf("  节点: +%d 更新 %d，边: +%d（总计 %d 节点 / %d 边）\n",
 			len(res.AddedNodes), len(res.UpdatedNodes), len(res.AddedEdges), len(dag.Nodes), len(dag.Edges)))
 		if res.Layout {
-			sb.WriteString("  已按“左细右粗”分层计算初始坐标。\n")
+			sb.WriteString("  已按自然拓扑深度（ASAP）计算初始坐标；milestone/e2e 钉最右终列。\n")
 		}
 		sb.WriteString(fmt.Sprintf("  PRD 覆盖率: %.1f%%（%d/%d 段，忽略 %d）\n",
 			res.Coverage.Percent, res.Coverage.Covered, res.Coverage.Total, res.Coverage.Ignored))
@@ -99,7 +99,7 @@ func runLayout(a *Args, rest []string) *Error {
 		mainN, parkedN, sourceN, redlineN := 0, 0, 0, 0
 		for _, n := range dag.Nodes {
 			switch {
-			case n.Scope == model.ScopeExternal || n.Scope == model.ScopeCollaborator:
+			case model.IsPrerequisiteScope(n.Scope):
 				sourceN++
 			case n.Scope == model.ScopeOutOfScope:
 				redlineN++
@@ -112,10 +112,10 @@ func runLayout(a *Args, rest []string) *Error {
 		}
 		var sb strings.Builder
 		if includeExternal {
-			sb.WriteString(fmt.Sprintf("[REQBOARD LAYOUT] 全图模式：%d 个 external/collaborator 节点排入最左侧 Column 0，%d 个我方节点沿左到右拓扑展开；%d 个红线节点收纳到底部停靠区。\n",
+			sb.WriteString(fmt.Sprintf("[REQBOARD LAYOUT] 全图模式：%d 个 external/collaborator/todo 前置节点排入最左侧 Column 0，%d 个我方节点沿左到右自然拓扑展开；%d 个红线节点收纳到底部停靠区。\n",
 				sourceN, mainN, redlineN))
 		} else {
-			sb.WriteString(fmt.Sprintf("[REQBOARD LAYOUT] 主画布 %d 个节点已按左细右粗紧凑排布；%d 个外部/红线节点收纳到独立停靠区（不占主画布列宽）。\n", mainN, parkedN))
+			sb.WriteString(fmt.Sprintf("[REQBOARD LAYOUT] 主画布 %d 个节点已按自然拓扑深度排布（仅 milestone/e2e 钉最右）；%d 个外部/协作者/TODO/红线节点收纳到独立停靠区（不占主画布列宽）。\n", mainN, parkedN))
 		}
 		layoutName := "left-thin-right-thick"
 		if includeExternal {

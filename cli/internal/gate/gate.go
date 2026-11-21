@@ -40,10 +40,16 @@ func Evaluate(dag *model.DAG, bindings *model.Bindings, rep *audit.Report, nodeI
 			continue
 		}
 		if from.Status != model.StatusDone {
+			msg := fmt.Sprintf("入边 %s (%s -> %s) 的上游节点 %s 仍为 %s", e.ID, from.ID, nodeID, from.ID, from.Status)
+			correction := fmt.Sprintf("先推进上游节点：`reqboard claim %s`，完成后 `reqboard done %s`", from.ID, from.ID)
+			if from.Scope == model.ScopeTodo {
+				msg = fmt.Sprintf("前置 TODO 未完成：入边 %s (%s -> %s) 的 TODO 节点 %s (%s) 仍为 %s", e.ID, from.ID, nodeID, from.ID, from.Title, from.Status)
+				correction = fmt.Sprintf("先完成前置 TODO：`reqboard done %s`（`reqboard todo list` 可查看全部 TODO 与阻塞关系）", from.ID)
+			}
 			out = append(out, Violation{
 				Gate: 1, Code: "upstream_not_done",
-				Message:    fmt.Sprintf("入边 %s (%s -> %s) 的上游节点 %s 仍为 %s", e.ID, from.ID, nodeID, from.ID, from.Status),
-				Correction: fmt.Sprintf("先推进上游节点：`reqboard claim %s`，完成后 `reqboard done %s`", from.ID, from.ID),
+				Message:    msg,
+				Correction: correction,
 			})
 		}
 	}

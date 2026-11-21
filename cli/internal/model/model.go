@@ -18,6 +18,7 @@ const (
 	ScopeMine         = "mine"
 	ScopeCollaborator = "collaborator"
 	ScopeExternal     = "external"
+	ScopeTodo         = "todo"
 	ScopeOutOfScope   = "out_of_scope"
 )
 
@@ -276,10 +277,51 @@ func NewSequentialID(prefix string, used map[string]bool) string {
 // ValidScope reports whether s is a known scope.
 func ValidScope(s string) bool {
 	switch s {
-	case ScopeMine, ScopeCollaborator, ScopeExternal, ScopeOutOfScope:
+	case ScopeMine, ScopeCollaborator, ScopeExternal, ScopeTodo, ScopeOutOfScope:
 		return true
 	}
 	return false
+}
+
+// IsPrerequisiteScope reports whether the scope is a first-class prerequisite
+// that lives outside the business implementation tree: external parties,
+// collaborators and engineering TODOs (DDL / gateway config / feature flag).
+// Prerequisite nodes never carry our code bindings; they only block downstream
+// completion (and optionally startup via the `block-start` tag).
+func IsPrerequisiteScope(scope string) bool {
+	switch scope {
+	case ScopeExternal, ScopeCollaborator, ScopeTodo:
+		return true
+	}
+	return false
+}
+
+// HasTag reports whether the node carries the tag (case-insensitive, trimmed).
+func (n *Node) HasTag(tag string) bool {
+	if n == nil {
+		return false
+	}
+	want := strings.ToLower(strings.TrimSpace(tag))
+	for _, t := range n.Tags {
+		if strings.ToLower(strings.TrimSpace(t)) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TodoKind returns the TODO kind tag (ddl|gateway|flag|other), defaulting to
+// "other" when the node carries none of the known kind tags.
+func (n *Node) TodoKind() string {
+	if n == nil {
+		return OpOther
+	}
+	for _, kind := range []string{OpDDL, OpGateway, OpFlag} {
+		if n.HasTag(kind) {
+			return kind
+		}
+	}
+	return OpOther
 }
 
 // ValidStatus reports whether s is a known node status.

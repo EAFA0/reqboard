@@ -70,7 +70,7 @@ func nodeAdd(a *Args, rest []string) *Error {
 		scope = model.ScopeMine
 	}
 	if !model.ValidScope(scope) {
-		return fail("invalid --scope %q (mine|collaborator|external|out_of_scope)", scope)
+		return fail("invalid --scope %q (mine|collaborator|external|todo|out_of_scope)", scope)
 	}
 	status := a.Str("status")
 	if status == "" {
@@ -180,9 +180,9 @@ func nodeUpdate(a *Args, id string) *Error {
 				return fail("invalid --status %q", s)
 			}
 			if s == model.StatusDone {
-				// External/collaborator nodes have no code to gate; recording
-				// their readiness is the whole point of the node.
-				if !isExternalScope(n.Scope) {
+				// Prerequisite nodes (external / collaborator / todo) have no
+				// our-side code to gate; recording readiness is the whole point.
+				if !model.IsPrerequisiteScope(n.Scope) {
 					return fail("不能直接改 status=done；请用 `reqboard done <id>`（人类强覆盖用 `--force-human --actor human`）")
 				}
 				n.Status = model.StatusDone
@@ -240,21 +240,37 @@ func nodeUpdate(a *Args, id string) *Error {
 			changed = append(changed, "attempts=0")
 		}
 		external := isExternalScope(n.Scope)
+		prereq := model.IsPrerequisiteScope(n.Scope)
 		unmock := a.Bool("unmock-downstream")
-		if unmock && !external {
-			return fail("--unmock-downstream 仅适用于 external/collaborator 节点")
+		if unmock && !prereq {
+			return fail("--unmock-downstream 仅适用于 external/collaborator/todo 节点")
 		}
 		mocked := mockedOutEdges(dag, id)
 		var switched, stale []string
 		if unmock {
 			if n.Status != model.StatusDone {
-				return fail("--unmock-downstream 需要先把外部节点标记 done")
+				return fail("--unmock-downstream 需要先把前置依赖标记 done")
 			}
 			switched, stale = applyUnmockDownstream(dag, n, ctx.Actor)
 			changed = append(changed, fmt.Sprintf("unmock_downstream=%d", len(switched)))
 		}
 		if len(changed) == 0 {
 			return fail("no update flags provided")
+		}
+		var unlocked []string
+		if prereq && n.Status == model.StatusDone {
+			for _, ed := range dag.OutEdges(id) {
+				if !model.BlockingEdge(ed.Kind) {
+					continue
+				}
+				target := dag.Node(ed.To)
+				if target == nil || target.Status == model.StatusDone || target.Status == model.StatusDeprecated {
+					continue
+				}
+				if allUpstreamDone(dag, ed.To) {
+					unlocked = append(unlocked, ed.To)
+				}
+			}
 		}
 		n.UpdatedAt = model.Now()
 		if ctx.Actor == "human" {
@@ -269,15 +285,19 @@ func nodeUpdate(a *Args, id string) *Error {
 		}
 		var sb strings.Builder
 		sb.WriteString(fmt.Sprintf("[REQBOARD NODE UPDATE] %s %s\n  已更新: %s\n", id, n.Title, strings.Join(changed, ", ")))
-		if external && n.Status == model.StatusDone && (a.Has("status") || unmock) {
+		if prereq && n.Status == model.StatusDone && (a.Has("status") || unmock) {
 			if unmock {
 				writeUnmockResult(&sb, switched, stale)
 			} else {
 				writeMockedEdgeHint(&sb, id, mocked)
 			}
 		}
+		if len(unlocked) > 0 {
+			sb.WriteString("  解锁下游: " + strings.Join(unlocked, ", ") + "\n")
+		}
 		ctx.Emit(sb.String(), map[string]interface{}{
 			"ok": true, "node": n, "changed": changed, "external": external,
+			"todo": n.Scope == model.ScopeTodo, "prerequisite": prereq, "unlocked": unlocked,
 			"mocked_edges": mocked, "unmocked_edges": switched, "stale_nodes": stale,
 		})
 		return nil

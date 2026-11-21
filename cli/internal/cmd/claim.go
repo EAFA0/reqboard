@@ -43,6 +43,8 @@ func runClaim(a *Args, rest []string) *Error {
 			return blocked("scope=external 外部依赖节点", "禁止 Agent 修改该部分代码；仅作为上游依赖与 mocked 边起点。")
 		case model.ScopeCollaborator:
 			return blocked("scope=collaborator 协作者负责节点", "禁止 Agent 修改该部分代码；请记录外部进度，不要 claim。")
+		case model.ScopeTodo:
+			return blocked("scope=todo 前置 TODO 节点", "前置 TODO（DDL / 网关配置 / Feature Flag）不是业务写码节点；请在看板勾选 Done 或 `reqboard done <id>`。")
 		}
 		if n.Status == model.StatusProposed {
 			return blocked("节点仍为 proposed", "待 owner 在看板审批（[批准]）后再 claim；审批前请勿修改该部分代码。")

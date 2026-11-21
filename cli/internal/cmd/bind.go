@@ -106,6 +106,8 @@ func runBind(a *Args, rest []string) *Error {
 				rule = "external 是外部联调方依赖，禁止 Agent 修改其代码。"
 			case model.ScopeCollaborator:
 				rule = "collaborator 由协作者负责，禁止 Agent 修改其代码。"
+			case model.ScopeTodo:
+				rule = "todo 是前置依赖（DDL / 网关配置 / Feature Flag），不是业务写码节点，禁止 bind。"
 			}
 			return &Error{Code: 1, Msg: "node scope is " + n.Scope, Text: fmt.Sprintf("[REQBOARD BLOCKED] 无法 bind %s：scope=%s\n  -> %s\n", id, n.Scope, rule)}
 		}

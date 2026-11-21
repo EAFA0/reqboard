@@ -17,6 +17,7 @@
     bucketOpen: { orphan: true, todelete: true, broken: false },
     dockHidden: false,
     dockFilter: 'all',
+    dockType: 'all',
     hoverExternal: null,
     selectedExternal: null,
     redlineOpen: false,
@@ -24,7 +25,6 @@
     anchorLinkedNodes: [],
     anchorBarClosed: false,
     diffSearch: '',
-    opsOpen: false,
   };
   let justDragged = false;
   let toastTimer = null;
@@ -64,8 +64,31 @@
     return (state.snap && state.snap.dag && state.snap.dag.edges) || [];
   }
 
-  function isExternalNode(n) {
-    return !!n && (n.scope === 'external' || n.scope === 'collaborator');
+  function isPrerequisiteNode(n) {
+    return !!n && (n.scope === 'external' || n.scope === 'collaborator' || n.scope === 'todo');
+  }
+
+  function isTodoNode(n) {
+    return !!n && n.scope === 'todo';
+  }
+
+  function todoKind(n) {
+    const tags = (n && n.tags) || [];
+    for (const kind of ['ddl', 'gateway', 'flag']) {
+      if (tags.some((t) => String(t).toLowerCase().trim() === kind)) {
+        return kind;
+      }
+    }
+    return 'other';
+  }
+
+  function todoKindLabel(n) {
+    return ({
+      ddl: 'DDL',
+      gateway: '网关',
+      flag: 'Flag',
+      other: 'TODO',
+    })[todoKind(n)] || 'TODO';
   }
 
   function isMainNode(n) {
@@ -85,21 +108,6 @@
     return (n && Array.isArray(n.ops)) ? n.ops : [];
   }
 
-  function opsEntries() {
-    const out = [];
-    for (const n of allNodes()) {
-      for (const op of nodeOps(n)) {
-        out.push({ node: n, op });
-      }
-    }
-    return out;
-  }
-
-  function opsStats() {
-    const entries = opsEntries();
-    return { total: entries.length, done: entries.filter((e) => e.op.done).length };
-  }
-
   function bindingsFor(id) {
     return (state.snap && state.snap.bindings ? state.snap.bindings : []).filter((b) => b.node_id === id);
   }
@@ -108,12 +116,15 @@
     if (!el) {
       return fallback;
     }
-    if (typeof el.value === 'string' && el.value) {
-      return el.value;
-    }
     const idx = typeof el.selectedIndex === 'number' ? el.selectedIndex : -1;
     if (idx >= 0 && el.options && el.options[idx]) {
-      return String(el.options[idx].value || el.options[idx].textContent || fallback);
+      const picked = String(el.options[idx].value || el.options[idx].textContent || '');
+      if (picked) {
+        return picked;
+      }
+    }
+    if (typeof el.value === 'string' && el.value) {
+      return el.value;
     }
     return fallback;
   }
@@ -132,22 +143,72 @@
   }
 
   // Mirror the CLI layout so the canvas updates instantly; the CLI persists the
-  // same coordinates and a later snapshot confirms them.
+  // same coordinates and a later snapshot confirms them. Ordinary nodes keep
+  // their natural left-to-right topology depth; only terminal milestone/e2e
+  // nodes are pinned to the far-right column.
   function layoutLocal(includeExternal) {
     const nodes = allNodes();
     if (!nodes.length) {
       return;
     }
     const dag = state.snap.dag || {};
-    const byId = {};
-    for (const n of nodes) {
-      byId[n.id] = n;
-    }
     const NODE_GAP_X = 320;
     const NODE_GAP_Y = 180;
-    const isSource = (n) => !!n && (n.scope === 'external' || n.scope === 'collaborator');
+    const isSource = (n) => isPrerequisiteNode(n);
     const isRedline = (n) => !!n && n.scope === 'out_of_scope';
     const isMain = (n) => !!n && (n.scope === 'mine' || n.status === 'proposed');
+    const blocking = (e) => e.kind === 'hard' || e.kind === 'mocked' || e.kind === 'stale';
+    const isMilestone = (n) => !!n && (n.tags || []).some((t) => {
+      const v = String(t).toLowerCase().trim();
+      return v === 'milestone' || v === 'e2e';
+    });
+
+    const computeDepth = (ids) => {
+      const set = new Set(ids);
+      const depth = {};
+      for (let pass = 0; pass < nodes.length; pass++) {
+        let changed = false;
+        for (const e of (dag.edges || [])) {
+          if (!set.has(e.from) || !set.has(e.to) || !blocking(e)) {
+            continue;
+          }
+          const cand = (depth[e.from] || 0) + 1;
+          if (cand > (depth[e.to] || 0)) {
+            depth[e.to] = cand;
+            changed = true;
+          }
+        }
+        if (!changed) {
+          break;
+        }
+      }
+      return depth;
+    };
+
+    const pinMilestones = (groupNodes, depth) => {
+      const outCount = {};
+      for (const e of (dag.edges || [])) {
+        if (!blocking(e)) {
+          continue;
+        }
+        outCount[e.from] = (outCount[e.from] || 0) + 1;
+      }
+      let maxFeature = -1;
+      for (const n of groupNodes) {
+        if (!isMilestone(n)) {
+          maxFeature = Math.max(maxFeature, depth[n.id] || 0);
+        }
+      }
+      if (maxFeature < 0) {
+        return;
+      }
+      for (const n of groupNodes) {
+        if (!isMilestone(n) || (outCount[n.id] || 0) > 0) {
+          continue;
+        }
+        depth[n.id] = Math.max(depth[n.id] || 0, maxFeature + 1);
+      }
+    };
 
     const parkRedlines = (redlines, topY) => {
       redlines.sort((a, b) => String(a.title).localeCompare(String(b.title)));
@@ -164,18 +225,8 @@
     if (!includeExternal) {
       const main = nodes.filter(isMain);
       const mainSet = new Set(main.map((n) => n.id));
-      const depth = {};
-      for (let pass = 0; pass < nodes.length; pass++) {
-        for (const e of (dag.edges || [])) {
-          if (!mainSet.has(e.from) || !mainSet.has(e.to) || e.kind === 'discovered') {
-            continue;
-          }
-          const cand = (depth[e.from] || 0) + 1;
-          if (cand > (depth[e.to] || 0)) {
-            depth[e.to] = cand;
-          }
-        }
-      }
+      const depth = computeDepth(main.map((n) => n.id));
+      pinMilestones(main, depth);
       const parked = nodes.filter((n) => !mainSet.has(n.id));
       parked.sort((a, b) => {
         if (a.scope !== b.scope) {
@@ -215,28 +266,10 @@
       return;
     }
 
-    // Full graph: external / collaborator sources sit in Column 0.
+    // Full graph: external / collaborator / todo sources sit in Column 0 and
+    // flow naturally into the left-to-right topology.
     const flow = nodes.filter((n) => !isRedline(n));
-    const flowSet = new Set(flow.map((n) => n.id));
-    const depth = {};
-    for (let pass = 0; pass < nodes.length; pass++) {
-      for (const e of (dag.edges || [])) {
-        if (!flowSet.has(e.from) || !flowSet.has(e.to) || e.kind === 'discovered') {
-          continue;
-        }
-        const from = byId[e.from];
-        if (isSource(from)) {
-          if ((depth[e.to] || 0) < 1) {
-            depth[e.to] = 1;
-          }
-          continue;
-        }
-        const cand = (depth[e.from] || 0) + 1;
-        if (cand > (depth[e.to] || 0)) {
-          depth[e.to] = cand;
-        }
-      }
-    }
+    const depth = computeDepth(flow.map((n) => n.id));
     for (const n of flow) {
       if (isSource(n)) {
         depth[n.id] = 0;
@@ -244,6 +277,7 @@
         depth[n.id] = 0;
       }
     }
+    pinMilestones(flow.filter((n) => !isSource(n)), depth);
     const rank = (n) => isSource(n) ? 0 : (n.status === 'proposed' ? 1 : 2);
     const groups = {};
     let maxCount = 1;
@@ -278,8 +312,8 @@
     parkRedlines(nodes.filter(isRedline), mainBottom + 80);
   }
 
-  function externalNodes() {
-    return allNodes().filter((n) => isExternalNode(n) && n.status !== 'deprecated');
+  function dockNodes() {
+    return allNodes().filter((n) => isPrerequisiteNode(n) && n.status !== 'deprecated');
   }
 
   function visibleNodes() {
@@ -295,22 +329,22 @@
     return n && isMainNode(n) && isCanvasNodeId(n.id) ? n : null;
   }
 
-  function externalInEdges(nodeId) {
+  function prerequisiteInEdges(nodeId) {
     return allEdges().filter((e) => {
       if (e.to !== nodeId) {
         return false;
       }
-      return isExternalNode(findNode(e.from));
+      return isPrerequisiteNode(findNode(e.from));
     });
   }
 
-  function downstreamOfExternal(extId) {
+  function downstreamOfPrerequisite(extId) {
     return allEdges().filter((e) => {
       if (e.from !== extId) {
         return false;
       }
       const to = findNode(e.to);
-      return !!to && to.scope === 'mine';
+      return !!to && isMainNode(to);
     });
   }
 
@@ -338,6 +372,7 @@
       mine: 'mine',
       collaborator: 'collab',
       external: 'external',
+      todo: 'todo',
       out_of_scope: 'out_of_scope',
     })[s] || s || '';
   }
@@ -433,7 +468,7 @@
     if (dp.status === 'QUIESCENT') {
       const b = dp.blocked || {};
       const n = (x) => (x || []).length;
-      stats += ` · QUIESCENT (approval ${n(b.waiting_approval)}, review ${n(b.waiting_review)}, external ${n(b.waiting_external)}, verify ${n(b.waiting_verification)}, circuit ${n(b.circuit_broken)}, redline ${n(b.out_of_scope)})`;
+      stats += ` · QUIESCENT (approval ${n(b.waiting_approval)}, review ${n(b.waiting_review)}, external ${n(b.waiting_external)}, todo ${n(b.waiting_todo)}, verify ${n(b.waiting_verification)}, circuit ${n(b.circuit_broken)}, redline ${n(b.out_of_scope)})`;
     } else if (dp.status) {
       stats += ` · ${dp.status} (${(dp.items || []).length} items)`;
     }
@@ -450,17 +485,11 @@
       redoBtn.textContent = `↪ 重做 (${redoDepth})`;
       redoBtn.disabled = redoDepth <= 0;
     }
-    const statsOps = opsStats();
-    const opsBtn = $('btn-ops');
-    if (opsBtn) {
-      opsBtn.textContent = `Ops 清单 (${statsOps.done}/${statsOps.total})`;
-      opsBtn.classList.toggle('active', state.opsOpen);
-    }
     const extBtn = $('btn-ext-canvas');
     if (extBtn) {
       extBtn.classList.toggle('active', state.showExternalCanvas);
       extBtn.title = state.showExternalCanvas
-        ? '当前画布含 external / collaborator / out_of_scope；点击恢复只显示我方主干'
+        ? '当前画布含 external / collaborator / todo / out_of_scope；点击恢复只显示我方主干'
         : '当前只显示 mine / proposed 主干；点击显示全图';
     }
   }
@@ -536,7 +565,7 @@
       }
       if (n.scope === 'out_of_scope') {
         links.redline.push(n);
-      } else if (isExternalNode(n)) {
+      } else if (isPrerequisiteNode(n)) {
         links.ext.push(n);
       } else if (isMainNode(n)) {
         links.canvas.push(n);
@@ -589,7 +618,7 @@
       focusRedlineNode(n);
       return;
     }
-    if (isExternalNode(n)) {
+    if (isPrerequisiteNode(n)) {
       focusExternalNode(n);
       return;
     }
@@ -605,7 +634,7 @@
     ensureDockShows([n]);
     selectExternal(n.id, { clearNode: true });
     pulseDock(n.id);
-    const downstream = downstreamOfExternal(n.id)
+    const downstream = downstreamOfPrerequisite(n.id)
       .map((e) => findNode(e.to))
       .filter((x) => x && isMainNode(x));
     if (downstream.length) {
@@ -634,17 +663,24 @@
   function ensureDockShows(nodes) {
     const list = nodes || [];
     state.dockHidden = false;
-    const visible = externalNodes();
-    const filtered = state.dockFilter === 'waiting'
-      ? visible.filter((n) => n.status !== 'done')
-      : state.dockFilter === 'ready'
-        ? visible.filter((n) => n.status === 'done')
-        : visible;
+    const visible = dockNodes();
+    let filtered = visible;
+    if (state.dockType === 'external') {
+      filtered = filtered.filter((n) => !isTodoNode(n));
+    } else if (state.dockType === 'todo') {
+      filtered = filtered.filter(isTodoNode);
+    }
+    if (state.dockFilter === 'waiting') {
+      filtered = filtered.filter((n) => n.status !== 'done');
+    } else if (state.dockFilter === 'ready') {
+      filtered = filtered.filter((n) => n.status === 'done');
+    }
     const shown = new Set(filtered.map((n) => n.id));
     if (list.some((n) => !shown.has(n.id))) {
+      state.dockType = 'all';
       state.dockFilter = 'all';
     }
-    renderExternalDock();
+    renderDock();
   }
 
   function pulseDock(id) {
@@ -663,7 +699,7 @@
     if (n.scope === 'out_of_scope') {
       return 'redline';
     }
-    return isExternalNode(n) ? 'ext' : 'mine';
+    return isPrerequisiteNode(n) ? 'ext' : 'mine';
   }
 
   function renderAnchorLinks() {
@@ -681,7 +717,7 @@
     const activeId = state.selectedNode || state.selectedExternal;
     const chips = nodes.map((n) => {
       const scope = anchorScopeClass(n);
-      const label = scope === 'ext' ? '外部' : scope === 'redline' ? '红线' : '我方';
+      const label = scope === 'redline' ? '红线' : isTodoNode(n) ? 'TODO' : scope === 'ext' ? '外部' : '我方';
       const active = n.id === activeId ? ' active' : '';
       return `<button class="anchor-link scope-${scope}${active}" data-anchor-node="${esc(n.id)}" title="${esc(n.title)}"><span class="anchor-link-scope">${label}</span>${esc(n.title)}</button>`;
     }).join('');
@@ -742,9 +778,17 @@
     $('dag-edges').innerHTML = parts.join('');
   }
 
+  function prerequisiteLabel(n, fallback) {
+    if (!n) {
+      return shortLabel(fallback);
+    }
+    return isTodoNode(n) ? todoKindLabel(n) : shortLabel(n.title);
+  }
+
   function extPillHTML(e) {
     const from = findNode(e.from);
     const done = !!from && from.status === 'done';
+    const todo = isTodoNode(from);
     let cls = 'hard';
     let prefix = '等:';
     if (done) {
@@ -757,8 +801,11 @@
       cls = 'stale';
       prefix = '待:';
     }
+    if (todo) {
+      cls += ' todo';
+    }
     const tip = `${from ? from.title : e.from} · ${done ? '已就绪' : e.kind}${e.note ? ' · ' + e.note : ''}`;
-    return `<button class="ext-pill ${cls}" data-ext-edge="${esc(e.id)}" title="${esc(tip)}">${prefix}${esc(shortLabel(from ? from.title : e.from))}</button>`;
+    return `<button class="ext-pill ${cls}" data-ext-edge="${esc(e.id)}" title="${esc(tip)}">${prefix}${esc(prerequisiteLabel(from, e.from))}</button>`;
   }
 
   function nodeHTML(n) {
@@ -780,7 +827,7 @@
     if (n.stale) { badges.push(`<span class="chip stale" title="${esc(n.stale_reason || '')}">stale</span>`); }
     if (mockDebt > 0) { badges.push(`<span class="chip mock" title="Mock 债">mock ${mockDebt}</span>`); }
     if (n.hold) { badges.push('<span class="chip hold">hold</span>'); }
-    const extEdges = isMainNode(n) ? externalInEdges(n.id) : [];
+    const extEdges = isMainNode(n) ? prerequisiteInEdges(n.id) : [];
     const extPills = extEdges.length
       ? `<div class="node-ext-pills">${extEdges.map(extPillHTML).join('')}</div>`
       : '';
@@ -1025,60 +1072,77 @@
       renderRight();
     }
     applyExternalHighlight();
-    renderExternalDock();
+    renderDock();
     renderAnchorLinks();
   }
 
-  function renderExternalDock() {
+  function renderDock() {
     if (!state.snap) {
       return;
     }
-    const ext = externalNodes();
-    const done = ext.filter((n) => n.status === 'done').length;
-    $('dock-count').textContent = `外部依赖 ${done}/${ext.length}`;
+    const all = dockNodes();
+    const done = all.filter((n) => n.status === 'done').length;
+    $('dock-count').textContent = `前置依赖 ${done}/${all.length}`;
+    $('dock-count').title = `外部/协作者 ${all.filter((n) => !isTodoNode(n)).length} · TODO ${all.filter(isTodoNode).length}`;
     $('btn-dock-toggle').textContent = state.dockHidden ? '展开' : '隐藏';
     $('dock-cards').classList.toggle('hidden', state.dockHidden);
+    for (const btn of document.querySelectorAll('[data-dock-type]')) {
+      btn.classList.toggle('active', btn.dataset.dockType === state.dockType);
+    }
     for (const btn of document.querySelectorAll('[data-dock-filter]')) {
       btn.classList.toggle('active', btn.dataset.dockFilter === state.dockFilter);
     }
     const sel = findNode(state.selectedNode);
     const linkedToSelected = new Set();
     if (sel) {
-      for (const e of externalInEdges(sel.id)) {
+      for (const e of prerequisiteInEdges(sel.id)) {
         linkedToSelected.add(e.from);
       }
     }
-    let list = ext;
+    let list = all;
+    if (state.dockType === 'external') {
+      list = list.filter((n) => !isTodoNode(n));
+    } else if (state.dockType === 'todo') {
+      list = list.filter(isTodoNode);
+    }
     if (state.dockFilter === 'waiting') {
-      list = ext.filter((n) => n.status !== 'done');
+      list = list.filter((n) => n.status !== 'done');
     } else if (state.dockFilter === 'ready') {
-      list = ext.filter((n) => n.status === 'done');
+      list = list.filter((n) => n.status === 'done');
     }
     const active = activeExternal();
     const cards = list.map((n) => {
-      const downstream = downstreamOfExternal(n.id);
+      const downstream = downstreamOfPrerequisite(n.id);
       const mocked = downstream.filter((e) => e.kind === 'mocked').length;
       const hard = downstream.filter((e) => e.kind === 'hard').length;
       const isDone = n.status === 'done';
       const linked = linkedToSelected.has(n.id) || active === n.id;
-      return `<div class="dock-card ${isDone ? 'done' : ''} ${linked ? 'linked' : ''}" data-ext-id="${esc(n.id)}" title="${esc(n.title)}">
+      const todo = isTodoNode(n);
+      const typeChip = todo
+        ? `<span class="dock-kind kind-${esc(todoKind(n))}" title="TODO 类型">${esc(todoKindLabel(n))}</span>`
+        : `<span class="dock-scope scope-${esc(n.scope)}">${esc(scopeLabel(n.scope))}</span>`;
+      return `<div class="dock-card ${todo ? 'todo-card' : ''} ${isDone ? 'done' : ''} ${linked ? 'linked' : ''}" data-ext-id="${esc(n.id)}" ${todo ? 'data-todo-id="' + esc(n.id) + '"' : ''} title="${esc(n.title)}">
         <div class="dock-card-top">
           <span class="dock-card-title">${esc(n.title)}</span>
           <span class="dock-impact" title="影响我方下游节点数">→ ${downstream.length}</span>
         </div>
         <div class="dock-card-meta">
-          <span class="dock-scope scope-${esc(n.scope)}">${esc(scopeLabel(n.scope))}</span>
+          ${typeChip}
+          ${n.description ? `<span class="dock-note" title="${esc(n.description)}">${esc(n.description)}</span>` : ''}
           ${mocked ? `<span class="dock-mock" title="mocked 出边">mock ${mocked}</span>` : ''}
           ${!mocked && hard ? `<span class="dock-hard" title="hard 出边">hard ${hard}</span>` : ''}
           <button class="dock-done ${isDone ? 'checked' : ''}" data-ext-done="${esc(n.id)}" title="${isDone ? '点击切回 pending' : '标记 Done'}">✓ Done</button>
         </div>
       </div>`;
     });
-    $('dock-cards').innerHTML = cards.join('') || `<div class="empty dock-empty">${
-      state.dockFilter === 'ready' ? '暂无已就绪外部依赖'
-        : state.dockFilter === 'waiting' ? '外部依赖已全部就绪'
-          : '没有外部依赖节点'
-    }</div>`;
+    const empty = all.length === 0
+      ? '没有前置依赖节点；点「+ 新增 TODO」创建 DDL / 网关 / Flag'
+      : state.dockFilter === 'ready' ? '暂无已就绪前置依赖'
+        : state.dockFilter === 'waiting' ? '前置依赖已全部就绪'
+          : state.dockType === 'todo' ? '暂无 TODO'
+            : state.dockType === 'external' ? '暂无外部/协作者依赖'
+              : '没有匹配的前置依赖';
+    $('dock-cards').innerHTML = cards.join('') || `<div class="empty dock-empty">${empty}</div>`;
     renderRedline();
     applyExternalHighlight();
   }
@@ -1121,20 +1185,21 @@
       el.innerHTML = '';
       return;
     }
-    const edges = downstreamOfExternal(n.id);
+    const edges = downstreamOfPrerequisite(n.id);
     const edgeHtml = edges.map((e) => {
       const to = findNode(e.to);
       return `<button class="focus-edge ${esc(e.kind)}" data-focus-edge="${esc(e.id)}" title="${esc(e.note || '点击修改边')}">→ ${esc(to ? to.title : e.to)}<span class="kind">${esc(e.kind)}</span>${e.note ? ` · ${esc(e.note)}` : ''}</button>`;
-    }).join('') || '<span class="muted">该外部节点没有指向我方节点的出边</span>';
+    }).join('') || '<span class="muted">该前置节点没有指向我方节点的出边</span>';
     el.classList.remove('hidden');
-    el.innerHTML = `<span class="focus-title">外部：${esc(n.title)}</span>${edgeHtml}`;
+    const label = isTodoNode(n) ? `TODO（${todoKindLabel(n)}）：` : '前置：';
+    el.innerHTML = `<span class="focus-title">${esc(label)}${esc(n.title)}</span>${edgeHtml}`;
   }
 
   function applyExternalHighlight() {
     const active = activeExternal();
     const linked = new Set();
     if (active) {
-      for (const e of downstreamOfExternal(active)) {
+      for (const e of downstreamOfPrerequisite(active)) {
         linked.add(e.to);
       }
     }
@@ -1146,9 +1211,9 @@
       if (!n) {
         continue;
       }
-      if (isExternalNode(n)) {
+      if (isPrerequisiteNode(n)) {
         anchorExternal = true;
-        for (const e of downstreamOfExternal(n.id)) {
+        for (const e of downstreamOfPrerequisite(n.id)) {
           linked.add(e.to);
         }
       } else if (isMainNode(n)) {
@@ -1166,7 +1231,7 @@
     const sel = findNode(state.selectedNode);
     const selExt = new Set();
     if (sel) {
-      for (const e of externalInEdges(sel.id)) {
+      for (const e of prerequisiteInEdges(sel.id)) {
         selExt.add(e.from);
       }
     }
@@ -1181,7 +1246,7 @@
     renderExternalFocus();
   }
 
-  function handleExternalDone(id) {
+  function handlePrerequisiteDone(id) {
     const n = findNode(id);
     if (!n) {
       return;
@@ -1190,7 +1255,7 @@
       post({ type: 'command', args: ['node', 'update', id, '--status', 'pending', '--actor', 'human'] });
       return;
     }
-    const mocked = downstreamOfExternal(id).filter((e) => e.kind === 'mocked');
+    const mocked = downstreamOfPrerequisite(id).filter((e) => e.kind === 'mocked');
     if (!mocked.length) {
       post({ type: 'done', id });
       return;
@@ -1207,7 +1272,7 @@
       return `<li>${esc(e.id)} → ${esc(to ? to.title : e.to)}${e.note ? `：${esc(e.note)}` : ''}</li>`;
     }).join('');
     div.innerHTML = `<button class="close" data-close>×</button>
-      <h4>外部依赖已就绪：${esc(n.title)}</h4>
+      <h4>前置依赖已就绪：${esc(n.title)}</h4>
       <div class="unmock-hint">存在 ${mocked.length} 条 mocked 出边。是否同时切回 hard 并标下游 stale？</div>
       <ul class="unmock-list">${rows}</ul>
       <div class="row">
@@ -1270,34 +1335,6 @@
       showToast('节点与 bindings 已强制删除；Ctrl+Z / Cmd+Z 可一键还原', 'info');
     };
     state.popup = div;
-  }
-
-  function renderOpsPanel() {
-    const panel = $('ops-panel');
-    if (!panel) {
-      return;
-    }
-    panel.classList.toggle('hidden', !state.opsOpen);
-    if (!state.opsOpen) {
-      panel.innerHTML = '';
-      return;
-    }
-    const entries = opsEntries();
-    const pending = entries.filter((e) => !e.op.done);
-    const done = entries.filter((e) => e.op.done);
-    const rows = pending.map(({ node, op }) => `<div class="ops-row">
-      <button class="op-check" data-op-toggle="${esc(op.id)}" data-op-node="${esc(node.id)}" title="勾选完成">○</button>
-      <span class="op-kind kind-${esc(op.kind)}">${esc(kindLabel(op.kind))}</span>
-      <span class="ops-row-title" data-ops-jump="${esc(node.id)}" title="跳转到 ${esc(node.title)}">${esc(op.title)}</span>
-      <span class="ops-row-node" data-ops-jump="${esc(node.id)}" title="跳转到 ${esc(node.title)}">${esc(node.title)}</span>
-      <button class="op-remove" data-op-remove="${esc(op.id)}" data-op-node="${esc(node.id)}" title="删除该 Ops">×</button>
-    </div>`).join('');
-    panel.innerHTML = `<div class="ops-panel-head">
-        <span>未完成 Ops (${pending.length}/${entries.length})</span>
-        <button data-ops-close title="收起">×</button>
-      </div>
-      ${rows || '<div class="empty">没有未完成的 Ops</div>'}
-      ${done.length ? `<div class="ops-done-summary">已完成 ${done.length} 项</div>` : ''}`;
   }
 
   /* ---------------- right panel ---------------- */
@@ -1480,6 +1517,135 @@
   }
 
   /* ---------------- popups ---------------- */
+
+  function mainCanvasChoices() {
+    return allNodes()
+      .filter((n) => isMainNode(n) && n.status !== 'deprecated')
+      .sort((a, b) => String(a.title).localeCompare(String(b.title)));
+  }
+
+  function openTodoAdd(rect) {
+    closePopup();
+    const div = document.createElement('div');
+    div.className = 'popup todo-add-popup';
+    const choices = mainCanvasChoices();
+    const blocks = choices.map((n) => `<label class="todo-block-row">
+        <input type="checkbox" value="${esc(n.id)}">
+        <span>${esc(n.title)}</span><span class="muted">${esc(n.id)}</span>
+      </label>`).join('') || '<div class="empty">暂无可关联的我方节点；留空即独立需求级 TODO</div>';
+    div.innerHTML = `<button class="close" data-close>×</button>
+      <h4>新增前置 TODO</h4>
+      <label>标题</label><input id="todo-title" placeholder="如 DDL: orders add confirmation_mode">
+      <label>类型</label><select id="todo-kind">
+        <option value="ddl">DDL</option>
+        <option value="gateway">网关</option>
+        <option value="flag">Flag</option>
+        <option value="other">其他</option>
+      </select>
+      <label>备注（可选）</label><input id="todo-note" placeholder="如 上线前执行 / 网关白名单">
+      <label>阻塞的下游我方节点（可留空 = 独立需求级 TODO）</label>
+      <div class="todo-blocks">${blocks}</div>
+      <div class="row"><button data-cancel>取消</button><button class="primary" data-create>创建</button></div>`;
+    $('popup-layer').appendChild(div);
+    positionPopup(div, rect ? rect.left : window.innerWidth / 2 - 170, rect ? rect.bottom + 6 : 140);
+    const submit = () => {
+      const titleEl = div.querySelector('#todo-title');
+      const title = titleEl ? titleEl.value.trim() : '';
+      if (!title) {
+        showToast('请填写 TODO 标题', 'error');
+        if (titleEl) { titleEl.focus(); }
+        return;
+      }
+      const selected = [...div.querySelectorAll('.todo-block-row input')]
+        .filter((el) => el.checked)
+        .map((el) => el.value);
+      const noteEl = div.querySelector('#todo-note');
+      post({
+        type: 'todo.add',
+        title,
+        kind: selectValue(div.querySelector('#todo-kind'), 'other'),
+        note: noteEl ? noteEl.value.trim() : '',
+        blocks: selected,
+      });
+      closePopup();
+      showToast('TODO 已创建' + (selected.length ? `，并连向 ${selected.length} 个下游节点` : ''), 'info');
+    };
+    div.querySelector('[data-close]').onclick = closePopup;
+    div.querySelector('[data-cancel]').onclick = closePopup;
+    div.querySelector('[data-create]').onclick = submit;
+    for (const id of ['todo-title', 'todo-note']) {
+      div.querySelector('#' + id).addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          submit();
+        }
+      });
+    }
+    state.popup = div;
+  }
+
+  function openTodoEditor(n, rect) {
+    closePopup();
+    const div = document.createElement('div');
+    div.className = 'popup todo-edit-popup';
+    const kind = todoKind(n);
+    const blockStart = (n.tags || []).some((t) => String(t).toLowerCase().trim() === 'block-start');
+    div.innerHTML = `<button class="close" data-close>×</button>
+      <h4>编辑 TODO <span class="badge">${esc(n.id)}</span></h4>
+      <label>标题</label><input id="te-title" value="${esc(n.title)}">
+      <label>类型</label><select id="te-kind">
+        <option value="ddl" ${kind === 'ddl' ? 'selected' : ''}>DDL</option>
+        <option value="gateway" ${kind === 'gateway' ? 'selected' : ''}>网关</option>
+        <option value="flag" ${kind === 'flag' ? 'selected' : ''}>Flag</option>
+        <option value="other" ${kind === 'other' ? 'selected' : ''}>其他</option>
+      </select>
+      <label>备注</label><input id="te-note" value="${esc(n.description || '')}">
+      <label class="checkline"><input type="checkbox" id="te-block-start" ${blockStart ? 'checked' : ''}> block-start（未完成时阻塞下游开工）</label>
+      <div class="todo-edit-hint">点击卡片下方关联边胶囊可编辑 / 删除具体阻塞连线。</div>
+      <div class="row"><button class="primary" data-save>保存</button><button class="danger" data-delete>删除</button></div>`;
+    $('popup-layer').appendChild(div);
+    positionPopup(div, rect ? rect.left : 220, rect ? rect.bottom + 6 : 150);
+    div.querySelector('[data-close]').onclick = closePopup;
+    div.querySelector('[data-save]').onclick = () => {
+      const title = div.querySelector('#te-title').value.trim();
+      if (!title) {
+        showToast('TODO 标题不能为空', 'error');
+        return;
+      }
+      const tags = [selectValue(div.querySelector('#te-kind'), 'other')];
+      for (const t of (n.tags || [])) {
+        const v = String(t).toLowerCase().trim();
+        if (v === 'ddl' || v === 'gateway' || v === 'flag' || v === 'other' || v === 'block-start') {
+          continue;
+        }
+        tags.push(t);
+      }
+      if (div.querySelector('#te-block-start').checked) {
+        tags.push('block-start');
+      }
+      post({
+        type: 'node.update',
+        id: n.id,
+        patch: {
+          title,
+          description: div.querySelector('#te-note').value.trim(),
+          tags,
+        },
+      });
+      closePopup();
+    };
+    let confirmDelete = false;
+    div.querySelector('[data-delete]').onclick = (e) => {
+      if (!confirmDelete) {
+        confirmDelete = true;
+        e.target.textContent = '确认删除?';
+        return;
+      }
+      closePopup();
+      requestDeleteNode(n.id);
+    };
+    state.popup = div;
+  }
 
   function openNodeEditor(n, rect) {
     closePopup();
@@ -1957,7 +2123,7 @@
     const doneBtn = e.target.closest('[data-ext-done]');
     if (doneBtn) {
       e.stopPropagation();
-      handleExternalDone(doneBtn.dataset.extDone);
+      handlePrerequisiteDone(doneBtn.dataset.extDone);
       return;
     }
     const card = e.target.closest('.dock-card');
@@ -1965,6 +2131,13 @@
       return;
     }
     const id = card.dataset.extId;
+    const n = findNode(id);
+    if (isTodoNode(n)) {
+      const rect = card.getBoundingClientRect();
+      selectExternal(id);
+      openTodoEditor(n, rect);
+      return;
+    }
     selectExternal(state.selectedExternal === id ? null : id);
   });
 
@@ -1997,14 +2170,26 @@
 
   $('btn-dock-toggle').onclick = () => {
     state.dockHidden = !state.dockHidden;
-    renderExternalDock();
+    renderDock();
   };
 
   for (const btn of document.querySelectorAll('[data-dock-filter]')) {
     btn.onclick = () => {
       state.dockFilter = btn.dataset.dockFilter;
-      renderExternalDock();
+      renderDock();
     };
+  }
+
+  for (const btn of document.querySelectorAll('[data-dock-type]')) {
+    btn.onclick = () => {
+      state.dockType = btn.dataset.dockType;
+      renderDock();
+    };
+  }
+
+  const addTodoBtn = $('btn-add-todo');
+  if (addTodoBtn) {
+    addTodoBtn.onclick = () => openTodoAdd(addTodoBtn.getBoundingClientRect());
   }
 
   $('btn-redline').onclick = () => {
@@ -2043,39 +2228,6 @@
     }
   });
 
-  $('ops-panel').addEventListener('click', (e) => {
-    if (e.target.closest('[data-ops-close]')) {
-      state.opsOpen = false;
-      renderOpsPanel();
-      renderTop();
-      return;
-    }
-    const toggle = e.target.closest('[data-op-toggle]');
-    if (toggle) {
-      post({ type: 'ops.toggle', nodeId: toggle.dataset.opNode, opId: toggle.dataset.opToggle });
-      return;
-    }
-    const remove = e.target.closest('[data-op-remove]');
-    if (remove) {
-      post({ type: 'ops.remove', nodeId: remove.dataset.opNode, opId: remove.dataset.opRemove });
-      return;
-    }
-    const jump = e.target.closest('[data-ops-jump]');
-    if (jump) {
-      const id = jump.dataset.opsJump;
-      state.opsOpen = false;
-      renderOpsPanel();
-      renderTop();
-      selectNode(id, { center: true });
-      return;
-    }
-  });
-
-  $('btn-ops').onclick = () => {
-    state.opsOpen = !state.opsOpen;
-    renderOpsPanel();
-    renderTop();
-  };
   $('btn-undo').onclick = () => {
     if (Number((state.snap && state.snap.undo_depth) || 0) <= 0) {
       showToast('没有可撤销的操作', 'info');
@@ -2104,7 +2256,7 @@
   $('btn-fit').onclick = () => fitView();
   $('btn-layout').onclick = () => {
     state.view.initialized = false;
-    post({ type: 'layout' });
+    post({ type: 'layout', includeExternal: state.showExternalCanvas });
   };
   $('btn-goal').onclick = () => post({ type: 'copy.goal' });
   $('btn-orch').onclick = () => post({
@@ -2184,9 +2336,8 @@
     renderTop();
     renderPRD();
     renderDAG();
-    renderExternalDock();
+    renderDock();
     renderAnchorLinks();
-    renderOpsPanel();
     renderRight();
   }
 

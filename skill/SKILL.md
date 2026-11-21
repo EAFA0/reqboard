@@ -13,8 +13,8 @@ description: 多仓复杂需求的本地控制面：PRD 锚点、功能级 DAG�
 ### Planner（只拆图，不写码）
 0. `reqboard init --name <slug>` 在无 git 子仓时进入规划模式；看板审完 DAG 后用 `reqboard repo add --name <n> --path <dir> [--base <ref>]` 挂载代码仓。
 1. `reqboard prd init <src.md>`；PRD 更新用 `prd sync <new.md>`（自动对齐锚点并级联 stale）。
-2. `reqboard plan import plan.json`：按业务功能/规则拆节点，叶子必须有 `prd_refs`，DAG 必须无环。
-3. `out_of_scope` 红线与 `external` 依赖必须显式建节点，禁止留给 Agent 脑补。
+2. `reqboard plan import plan.json`：按业务功能/规则拆节点，业务叶子必须有 `prd_refs`，DAG 必须无环；`todo` 前置节点允许无 `prd_refs`。
+3. `out_of_scope` 红线、`external` 依赖与工程 `todo` 前置必须显式建节点，禁止留给 Agent 脑补；TODO 可用 `reqboard todo add` 或 plan.json 的 `scope: "todo"` 建。
 4. `reqboard status` 检查 Unmapped PRD、覆盖率与 Orphan Diff。
 
 **三段式高质量建图（强烈推荐在技术方案对齐末尾执行，而非冷读 PRD 一把梭）**：
@@ -27,8 +27,9 @@ description: 多仓复杂需求的本地控制面：PRD 锚点、功能级 DAG�
 - 多段相关 PRD 锚定到**同一个功能点节点**（复用 `prd_refs`），不要一段一节点。
 - 不为纯名词解释、纯复用老逻辑（0 代码改动）、并列枚举拆孤立开发节点。
 - 只为“有独立代码增量行为 / 独立验收路径”的规则建节点。
-- DDL、网关配置、Feature Flag 等交付动作挂到所属节点的 `ops` 清单，**不新增 DAG 节点**：
-  `reqboard ops add <node_id> --kind ddl|gateway|flag|other --title "..." [--note "..."]`。
+- 外部依赖、协作者与跨节点工程 TODO 是一等前置节点（`external` / `collaborator` / `todo`），不进入主画布业务网格：
+  `reqboard todo add "<title>" --kind ddl|gateway|flag|other --blocks <n1,n2,...> [--note "..."]`。
+- 仅影响单个节点的历史 `ops` 清单继续兼容：`reqboard ops add <node_id> --kind ... --title "..."`；跨节点 1→N 阻塞请用 `todo`。
 
 ### Goal Orchestrator（`/goal`，只调度不写码）
 循环直到 `QUIESCENT`：
@@ -53,20 +54,22 @@ description: 多仓复杂需求的本地控制面：PRD 锚点、功能级 DAG�
 - `tags: ["scope"|"e2e"|"milestone"]` 的节点不进入 P1 实现队列，作为范围基线 / 端到端 / 验收节点由 owner 或 QA 复核。
 - 边：`hard` 实线；`mocked` 橙虚线（带备注，阻塞 done）；`stale` 黄虚线；`discovered` 灰点线。
 - **外部硬阻塞**：`mine/pending` 若存在 `external|collaborator --hard--> mine` 且上游未 done，不进入 P1，归入 `waiting_external`（原因会提示改 `mocked` 或等外部 done）。
+- **TODO 前置**：`todo` 节点自身不进入 P1，归入 `waiting_todo`；`todo --hard--> mine` 默认只卡下游 `done`，DDL 未跑完仍可先写代码/单测；只有 TODO 带 `block-start` tag 时才卡 P1 开工。
 - **Mock 先行**：`external --mocked--> mine` 仍可进入 P1 带 Mock 并行开发；`mine --> mine` 依赖只卡完结、不卡开工。
-- **外部就绪**：`reqboard done <external-id> [--unmock-downstream]` 或 `node update <id> --status done [--unmock-downstream]` 无需我方代码门禁；`--unmock-downstream` 会把 mocked 出边切回 hard，并把下游 mine 标 `stale`（需拆 Mock 切真联调）。
+- **前置就绪**：`reqboard done <external|collaborator|todo-id> [--unmock-downstream]` 或 `node update <id> --status done` 无需我方代码门禁；`--unmock-downstream` 会把 mocked 出边切回 hard，并把下游 mine 标 `stale`（需拆 Mock 切真联调）。
+- `reqboard todo add "<title>" --kind ddl|gateway|flag|other --blocks <n1,n2,...>` 自动建 `hard` 边；`reqboard todo list [--json]` 查看完成状态与阻塞下游。
 - `mocked → hard` 自动把下游标 `stale`。
 - `deprecated` 节点保留 bindings，残留 diff 一直进 `To-Delete`；误建节点用 `reqboard node delete <id>` 彻底删除（有 bindings 时需 `--force`，否则先提示改用 `deprecate`）。
-- `done` 四道门禁（仅 mine）：前置全 done / 零 Mock 债 / 非 stale 且无 open 批注 / check 干净。
-- `reqboard layout` 只给我方主干（`mine` / `proposed`）排紧凑左到右网格；`external|collaborator|out_of_scope` 收纳到独立停靠区，不占主画布列宽。
-- `reqboard layout --include-external`（看板「画布含外部」）把 `external|collaborator` 排到最左 Column 0 源头列，自然融入左到右拓扑。
+- `done` 四道门禁（仅 mine）：前置全 done / 零 Mock 债 / 非 stale 且无 open 批注 / check 干净；上游 TODO 未完成时 Gate 1 会明确报错并提示先 `reqboard done <todo-id>`。
+- `reqboard layout` 主画布按自然拓扑深度（ASAP）左→右排布，保留真实链路长短；仅 `milestone` / `e2e` 终结业务场景节点钉在最右终列。
+- `external|collaborator|todo|out_of_scope` 默认不占主画布网格；`reqboard layout --include-external`（看板「画布含前置」）把它们统一排到最左 Column 0 源头列，自然融入左到右拓扑。
 - `reqboard undo` / `redo`：每次写 `dag.json` / `bindings.json` / `config.json` 前自动在 `.reqboard/.undo/` 记录前态快照（最多 20 步，flock 内原子完成）；`status --json` 返回 `undo_depth` / `redo_depth`。
-- 节点级 `ops` 是轻量交付清单（DDL / 网关配置 / Feature Flag），不污染 DAG 节点数；看板顶栏 `Ops 清单 (done/total)` 可汇总勾选与跳转。
+- 节点级 `ops` 是兼容保留的轻量交付清单；跨节点 DDL / 网关 / Flag 用一等 `todo` 节点，看板顶部统一 Prerequisite Dock 管理。
 - Diff 采用三点语义：先 `git merge-base <base_ref> HEAD`，再对共同祖先执行 `git diff`，base 分支领先时不会把其新提交误报为反向删除。
 - 人类在看板的修改优先级最高；`claim` 会注入 `[人工最新调整]`。
 
 ## 常用命令
-`status` / `filter show|set` / `dispatch` / `claim` / `bind [--all-symbols]` / `unbind` / `propose` / `mock add|resolve` / `ops add|toggle|remove` / `check --all` / `review-pack` / `done [--unmock-downstream]` / `layout [--include-external]` / `node delete [--force]` / `undo` / `redo`
+`status` / `filter show|set` / `dispatch` / `claim` / `bind [--all-symbols]` / `unbind` / `propose` / `mock add|resolve` / `todo add|list` / `ops add|toggle|remove` / `check --all` / `review-pack` / `done [--unmock-downstream]` / `layout [--include-external]` / `node delete [--force]` / `undo` / `redo`
 
 Diff 审计默认排除单测（`exclude_tests=true`）与生成代码；需要收窄/放宽时用 `reqboard filter set --include <globs> --exclude <globs> --exclude-tests=true|false`，`filter show --json` 可回读当前生效规则。显式 `bind` 的 mock/impl 文件（以及显式绑定的测试文件）会豁免默认噪声过滤，确保手写 mock 与验收代码可见。
 所有命令支持 `--json`；报错文本即规则注入，按提示纠偏。

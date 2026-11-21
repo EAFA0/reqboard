@@ -22,7 +22,6 @@ const BODY = `<!DOCTYPE html><html><body>
   <div id="top-stats"></div>
   <button id="btn-undo"></button>
   <button id="btn-redo"></button>
-  <button id="btn-ops"></button>
   <button id="btn-ext-canvas"></button>
   <button id="btn-refresh"></button>
   <button id="btn-fit"></button>
@@ -30,7 +29,6 @@ const BODY = `<!DOCTYPE html><html><body>
   <button id="btn-goal"></button>
   <button id="btn-orch"></button>
 </header>
-<div id="ops-panel" class="ops-panel hidden"></div>
 <div id="prd-list"></div>
 <div id="coverage-badge"></div>
 <div id="dag-pane">
@@ -38,9 +36,13 @@ const BODY = `<!DOCTYPE html><html><body>
   <div id="external-dock">
     <button id="btn-dock-toggle"></button>
     <span id="dock-count"></span>
+    <button data-dock-type="all" class="active"></button>
+    <button data-dock-type="external"></button>
+    <button data-dock-type="todo"></button>
     <button data-dock-filter="all" class="active"></button>
     <button data-dock-filter="waiting"></button>
     <button data-dock-filter="ready"></button>
+    <button id="btn-add-todo"></button>
     <button id="btn-redline"></button>
     <div id="dock-cards"></div>
     <div id="redline-panel" class="hidden"></div>
@@ -142,6 +144,10 @@ const snapshot = {
       node('rb-ext', 'CRM 接口', 'external', 'pending', 80, 60),
       node('rb-ext2', '商品侧', 'collaborator', 'done', 360, 60),
       node('rb-ext3', '合同', 'external', 'pending', 640, 60),
+      Object.assign(node('rb-todo', 'DDL: orders add confirmation_mode', 'todo', 'pending', 80, 60), {
+        tags: ['ddl'],
+        description: '上线前执行',
+      }),
       node('rb-red', '退订（本期不做）', 'out_of_scope', 'pending', 920, 60),
     ],
     edges: [
@@ -149,6 +155,8 @@ const snapshot = {
       { id: 'ed-2', from: 'rb-ext2', to: 'rb-b', kind: 'hard', note: '' },
       { id: 'ed-3', from: 'rb-ext3', to: 'rb-a', kind: 'hard', note: '' },
       { id: 'ed-4', from: 'rb-a', to: 'rb-b', kind: 'hard', note: '' },
+      { id: 'ed-5', from: 'rb-todo', to: 'rb-a', kind: 'hard', note: '' },
+      { id: 'ed-6', from: 'rb-todo', to: 'rb-b', kind: 'hard', note: '' },
     ],
   },
 };
@@ -213,32 +221,39 @@ function wideSnapshot() {
   return snap;
 }
 
-test('external dock aggregates all external/collaborator nodes', () => {
+test('prerequisite dock aggregates external, collaborator and todo nodes', () => {
   const { document } = boot();
-  assert.strictEqual(document.getElementById('dock-count').textContent, '外部依赖 1/3');
+  assert.strictEqual(document.getElementById('dock-count').textContent, '前置依赖 1/4');
   const cards = [...document.querySelectorAll('.dock-card')];
-  assert.strictEqual(cards.length, 3);
+  assert.strictEqual(cards.length, 4);
   const crm = cards.find((c) => c.dataset.extId === 'rb-ext');
   assert.ok(crm, 'CRM card missing');
   assert.ok(crm.textContent.includes('→ 1'), 'downstream impact missing: ' + crm.textContent);
   assert.ok(crm.textContent.includes('mock 1'), 'mock badge missing: ' + crm.textContent);
+  const todo = cards.find((c) => c.dataset.todoId === 'rb-todo');
+  assert.ok(todo, 'todo card missing');
+  assert.ok(todo.classList.contains('todo-card'));
+  assert.ok(todo.textContent.includes('DDL'), 'todo kind chip missing: ' + todo.textContent);
+  assert.ok(todo.textContent.includes('→ 2'), 'todo downstream impact missing: ' + todo.textContent);
 });
 
-test('main canvas renders only mine/proposed and keeps external pills', () => {
+test('main canvas renders only mine/proposed and keeps prerequisite pills', () => {
   const { document, window } = boot();
   const ids = [...document.querySelectorAll('.dag-node')].map((el) => el.dataset.node).sort();
   assert.deepStrictEqual(ids, ['rb-a', 'rb-b']);
   const mine = document.querySelector('.dag-node[data-node="rb-a"]');
   assert.ok(mine, 'mine node missing');
   const pills = [...mine.querySelectorAll('.ext-pill')];
-  assert.strictEqual(pills.length, 2);
+  assert.strictEqual(pills.length, 3);
   assert.ok(pills.some((p) => p.className.includes('mocked') && p.textContent.includes('mock:')));
   assert.ok(pills.some((p) => p.className.includes('hard') && p.textContent.includes('等:')));
-  // Full-graph toggle brings external + out_of_scope nodes back.
+  assert.ok(pills.some((p) => p.className.includes('todo') && p.textContent.includes('等:DDL')), 'todo pill missing: ' + pills.map((p) => p.textContent));
+  // Full-graph toggle brings prerequisite + out_of_scope nodes back.
   click(window, document.getElementById('btn-ext-canvas'));
   const allIds = [...document.querySelectorAll('.dag-node')].map((el) => el.dataset.node);
-  assert.strictEqual(allIds.length, 6);
+  assert.strictEqual(allIds.length, 7);
   assert.ok(allIds.includes('rb-ext'));
+  assert.ok(allIds.includes('rb-todo'));
   assert.ok(allIds.includes('rb-red'));
 });
 
@@ -268,12 +283,19 @@ test('done with mocked edges asks whether to unmock downstream', () => {
   assert.ok(popup.textContent.includes('CRM 未确认'));
 });
 
-test('filters, dock collapse and red-line capsule work', () => {
+test('type/status filters, dock collapse and red-line capsule work', () => {
   const { document, window } = boot();
+  click(window, document.querySelector('[data-dock-type="todo"]'));
+  assert.strictEqual(document.querySelectorAll('.dock-card').length, 1);
+  assert.ok(document.querySelector('.dock-card[data-todo-id="rb-todo"]'));
+  click(window, document.querySelector('[data-dock-type="external"]'));
+  assert.strictEqual(document.querySelectorAll('.dock-card').length, 3);
+  click(window, document.querySelector('[data-dock-type="all"]'));
+  assert.strictEqual(document.querySelectorAll('.dock-card').length, 4);
   click(window, document.querySelector('[data-dock-filter="ready"]'));
   assert.strictEqual(document.querySelectorAll('.dock-card').length, 1);
   click(window, document.querySelector('[data-dock-filter="waiting"]'));
-  assert.strictEqual(document.querySelectorAll('.dock-card').length, 2);
+  assert.strictEqual(document.querySelectorAll('.dock-card').length, 3);
   click(window, document.getElementById('btn-dock-toggle'));
   assert.ok(document.getElementById('dock-cards').classList.contains('hidden'));
   assert.strictEqual(document.getElementById('btn-dock-toggle').textContent, '展开');
@@ -483,27 +505,73 @@ test('node editor delete button routes through the delete guard', () => {
   assert.ok(msg && msg.id === 'rb-b');
 });
 
-test('ops capsule aggregates pending items, toggles and jumps to the owning node', () => {
-  const { document, window, messages } = boot();
-  const btn = document.getElementById('btn-ops');
-  assert.strictEqual(btn.textContent, 'Ops 清单 (1/2)');
-  const card = document.querySelector('.dag-node[data-node="rb-a"]');
-  const chips = [...card.querySelectorAll('.op-chip')];
-  assert.ok(chips.some((c) => c.textContent.includes('DDL') && !c.classList.contains('done')), 'pending DDL chip missing');
-  assert.ok(chips.some((c) => c.textContent.includes('✓Flag') && c.classList.contains('done')), 'done Flag chip missing');
+test('hovering a todo card highlights its blocked downstream nodes', () => {
+  const snap = JSON.parse(JSON.stringify(snapshot));
+  snap.dag.nodes.push(node('rb-iso', '独立节点', 'mine', 'pending', 720, 440));
+  const { document, window } = boot(snap);
+  const card = document.querySelector('.dock-card[data-todo-id="rb-todo"]');
+  card.dispatchEvent(new window.Event('mouseover', { bubbles: true }));
+  assert.ok(document.querySelector('.dag-node[data-node="rb-a"]').classList.contains('ext-linked'));
+  assert.ok(document.querySelector('.dag-node[data-node="rb-b"]').classList.contains('ext-linked'));
+  assert.ok(document.querySelector('.dag-node[data-node="rb-iso"]').classList.contains('dimmed'));
+  card.dispatchEvent(new window.Event('mouseout', { bubbles: true }));
+  assert.ok(!document.querySelector('.dag-node[data-node="rb-iso"]').classList.contains('dimmed'));
+});
 
-  click(window, btn);
-  const panel = document.getElementById('ops-panel');
-  assert.ok(!panel.classList.contains('hidden'), 'ops panel hidden');
-  assert.ok(panel.textContent.includes('未完成 Ops (1/2)'));
-  assert.ok(panel.textContent.includes('新增可见性索引'));
-  click(window, panel.querySelector('[data-op-toggle]'));
-  const toggle = messages.pop();
-  assert.strictEqual(toggle.type, 'ops.toggle');
-  assert.strictEqual(toggle.nodeId, 'rb-a');
-  assert.strictEqual(toggle.opId, 'op-01');
-  click(window, panel.querySelector('[data-ops-jump]'));
-  assert.ok(document.querySelector('.dag-node[data-node="rb-a"]').classList.contains('selected'));
+test('todo card click opens editor and saves kind/tags', () => {
+  const { document, window, messages } = boot();
+  click(window, document.querySelector('.dock-card[data-todo-id="rb-todo"]'));
+  const editor = document.querySelector('.todo-edit-popup');
+  assert.ok(editor, 'todo editor missing');
+  assert.strictEqual(editor.querySelector('#te-title').value, 'DDL: orders add confirmation_mode');
+  editor.querySelector('#te-title').value = 'DDL: orders add confirmation_mode v2';
+  editor.querySelector('#te-kind').selectedIndex = 2;
+  editor.querySelector('#te-block-start').checked = true;
+  click(window, editor.querySelector('[data-save]'));
+  const msg = messages.filter((m) => m.type === 'node.update').pop();
+  assert.ok(msg, 'node.update message missing');
+  assert.strictEqual(msg.id, 'rb-todo');
+  assert.strictEqual(msg.patch.title, 'DDL: orders add confirmation_mode v2');
+  assert.deepStrictEqual([...msg.patch.tags], ['flag', 'block-start']);
+});
+
+test('new TODO popup creates a todo and links selected downstream nodes', () => {
+  const { document, window, messages } = boot();
+  click(window, document.getElementById('btn-add-todo'));
+  const popup = document.querySelector('.todo-add-popup');
+  assert.ok(popup, 'todo add popup missing');
+  popup.querySelector('#todo-title').value = 'Gateway: allow visibility query';
+  popup.querySelector('#todo-kind').selectedIndex = 1;
+  popup.querySelector('#todo-note').value = '网关白名单';
+  popup.querySelector('.todo-block-row input[value="rb-a"]').checked = true;
+  popup.querySelector('.todo-block-row input[value="rb-b"]').checked = true;
+  click(window, popup.querySelector('[data-create]'));
+  const msg = messages.filter((m) => m.type === 'todo.add').pop();
+  assert.ok(msg, 'todo.add message missing');
+  assert.strictEqual(msg.title, 'Gateway: allow visibility query');
+  assert.strictEqual(msg.kind, 'gateway');
+  assert.strictEqual(msg.note, '网关白名单');
+  assert.deepStrictEqual([...msg.blocks], ['rb-a', 'rb-b']);
+});
+
+test('todo Done button posts done and unlocks downstream', () => {
+  const { document, window, messages } = boot();
+  click(window, document.querySelector('[data-ext-done="rb-todo"]'));
+  const msg = messages.filter((m) => m.type === 'done').pop();
+  assert.ok(msg, 'done message missing');
+  assert.strictEqual(msg.id, 'rb-todo');
+});
+
+test('toolbar layout keeps full-graph mode when external canvas is on', () => {
+  const { document, window, messages } = boot();
+  click(window, document.getElementById('btn-ext-canvas'));
+  click(window, document.getElementById('btn-layout'));
+  let layout = messages.filter((m) => m.type === 'layout').pop();
+  assert.strictEqual(layout.includeExternal, true);
+  click(window, document.getElementById('btn-ext-canvas'));
+  click(window, document.getElementById('btn-layout'));
+  layout = messages.filter((m) => m.type === 'layout').pop();
+  assert.strictEqual(layout.includeExternal, false);
 });
 
 test('node editor supports adding and toggling ops', () => {
@@ -542,12 +610,12 @@ test('right pane adds and toggles node ops', () => {
   assert.strictEqual(toggle.opId, 'op-01');
 });
 
-test('full-graph mode lays external sources in column 0', () => {
+test('full-graph mode lays prerequisite sources in column 0', () => {
   const { document, window, messages } = boot();
   click(window, document.getElementById('btn-ext-canvas'));
   const layout = messages.filter((m) => m.type === 'layout').pop();
   assert.ok(layout && layout.includeExternal === true, 'layout includeExternal message missing');
-  for (const id of ['rb-ext', 'rb-ext2', 'rb-ext3']) {
+  for (const id of ['rb-ext', 'rb-ext2', 'rb-ext3', 'rb-todo']) {
     const el = document.querySelector(`.dag-node[data-node="${id}"]`);
     assert.ok(el, id + ' missing from full canvas');
     assert.strictEqual(el.style.left, '80px', id + ' not in column 0: ' + el.style.left);

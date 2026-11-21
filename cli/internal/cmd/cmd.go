@@ -233,7 +233,7 @@ func Main(argv []string) int {
 		return 0
 	}
 	if argv[0] == "version" || argv[0] == "--version" {
-		fmt.Println("reqboard 0.2.0")
+		fmt.Println("reqboard 0.2.1")
 		return 0
 	}
 
@@ -286,6 +286,8 @@ func Main(argv []string) int {
 		err = runRedo(a, rest)
 	case "ops":
 		err = runOps(a, rest)
+	case "todo":
+		err = runTodo(a, rest)
 	default:
 		err = &Error{Code: 2, Msg: fmt.Sprintf("unknown command %q", cmd), Text: usage()}
 	}
@@ -344,6 +346,8 @@ func usage() string {
   reqboard filter set [--include <comma-globs>] [--exclude <comma-globs>] [--exclude-tests=true|false] [--reset]
   reqboard ops add <node_id> --kind ddl|gateway|flag|other --title "..." [--note "..."]
   reqboard ops toggle|remove <node_id> <op_id>
+  reqboard todo add "<title>" [--kind ddl|gateway|flag|other] [--blocks <n1,n2,...>] [--note "..."] [--tag block-start]
+  reqboard todo list [--json]
   reqboard layout [--auto] [--include-external]
   reqboard undo | redo
 

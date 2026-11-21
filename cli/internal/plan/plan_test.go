@@ -170,6 +170,21 @@ func TestCoverage(t *testing.T) {
 	}
 }
 
+func TestImportAllowsTodoWithoutPRDRefs(t *testing.T) {
+	d := model.NewDAG("x")
+	f := &File{Nodes: []Node{
+		{ID: "ddl", Title: "DDL: orders add confirmation_mode", Scope: model.ScopeTodo, Tags: []string{"ddl"}},
+		{ID: "impl", Title: "创单校验", PRDRefs: []string{"p:1-1"}},
+	}}
+	f.Edges = []Edge{{From: "ddl", To: "impl"}}
+	if _, err := Import(d, doc(t, "## 1\n\n- a\n"), f, Options{}); err != nil {
+		t.Fatalf("todo without prd_refs should be allowed: %v", err)
+	}
+	if d.Node("ddl").Scope != model.ScopeTodo {
+		t.Fatalf("todo scope not preserved: %+v", d.Node("ddl"))
+	}
+}
+
 func TestLayoutParksNonMainNodesOutsideMainGrid(t *testing.T) {
 	d := model.NewDAG("x")
 	mk := func(id, title, scope, status string) *model.Node {
@@ -205,7 +220,7 @@ func TestLayoutParksNonMainNodesOutsideMainGrid(t *testing.T) {
 	}
 }
 
-func TestLayoutRightAlignsSinksAndMilestones(t *testing.T) {
+func TestLayoutKeepsNaturalDepthAndPinsMilestones(t *testing.T) {
 	d := model.NewDAG("x")
 	mk := func(id string, tags ...string) *model.Node {
 		n := &model.Node{ID: id, Title: id, Scope: model.ScopeMine, Status: model.StatusPending, Tags: tags}
@@ -225,16 +240,54 @@ func TestLayoutRightAlignsSinksAndMilestones(t *testing.T) {
 
 	Layout(d)
 
-	if b1.Position.X != a3.Position.X {
-		t.Fatalf("short-chain sink b1.x=%.0f should right-align with a3.x=%.0f", b1.Position.X, a3.Position.X)
+	if b0.Position.X != a0.Position.X {
+		t.Fatalf("short chain should start at natural depth 0: b0.x=%.0f a0.x=%.0f", b0.Position.X, a0.Position.X)
 	}
-	if b0.Position.X != a2.Position.X {
-		t.Fatalf("b0.x=%.0f should pull right next to b1 (expected %.0f)", b0.Position.X, a2.Position.X)
+	if b1.Position.X != b0.Position.X+320 {
+		t.Fatalf("short chain sink must keep natural depth: b1.x=%.0f b0.x=%.0f", b1.Position.X, b0.Position.X)
+	}
+	if b1.Position.X == a3.Position.X {
+		t.Fatalf("ordinary short-chain sink b1 should not be right-aligned with a3 (both %.0f)", b1.Position.X)
+	}
+	if a2.Position.X != a0.Position.X+640 || a3.Position.X != a0.Position.X+960 {
+		t.Fatalf("long chain depth changed: a2.x=%.0f a3.x=%.0f", a2.Position.X, a3.Position.X)
 	}
 	if ms.Position.X <= a3.Position.X {
 		t.Fatalf("milestone ms.x=%.0f should sit right of feature sink a3.x=%.0f", ms.Position.X, a3.Position.X)
 	}
 	if iso.Position.X != a0.Position.X {
 		t.Fatalf("isolated node iso.x=%.0f should stay on leftmost column %.0f", iso.Position.X, a0.Position.X)
+	}
+}
+
+func TestLayoutFullPutsAllPrerequisiteScopesInColumnZero(t *testing.T) {
+	d := model.NewDAG("x")
+	mk := func(id, scope string) *model.Node {
+		n := &model.Node{ID: id, Title: id, Scope: scope, Status: model.StatusPending}
+		d.AddNode(n)
+		return n
+	}
+	ext := mk("ext", model.ScopeExternal)
+	collab := mk("collab", model.ScopeCollaborator)
+	todo := mk("todo", model.ScopeTodo)
+	mine := mk("mine", model.ScopeMine)
+	red := mk("red", model.ScopeOutOfScope)
+	d.AddEdge(&model.Edge{ID: "e1", From: "ext", To: "mine", Kind: model.EdgeHard})
+	d.AddEdge(&model.Edge{ID: "e2", From: "collab", To: "mine", Kind: model.EdgeHard})
+	d.AddEdge(&model.Edge{ID: "e3", From: "todo", To: "mine", Kind: model.EdgeHard})
+	d.AddEdge(&model.Edge{ID: "e4", From: "red", To: "mine", Kind: model.EdgeHard})
+
+	LayoutWith(d, true)
+
+	for _, n := range []*model.Node{ext, collab, todo} {
+		if n.Position.X != 80 {
+			t.Fatalf("%s (%s) x=%.0f, want 80 (column 0)", n.ID, n.Scope, n.Position.X)
+		}
+	}
+	if mine.Position.X <= 80 {
+		t.Fatalf("mine node should flow right of prerequisite sources: x=%.0f", mine.Position.X)
+	}
+	if red.Position.Y <= mine.Position.Y {
+		t.Fatalf("redline should sit below the flow: red.y=%.0f mine.y=%.0f", red.Position.Y, mine.Position.Y)
 	}
 }

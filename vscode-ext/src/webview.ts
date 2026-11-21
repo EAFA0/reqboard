@@ -35,16 +35,14 @@ export function renderHTML(webview: vscode.Webview, extensionUri: vscode.Uri): s
   <div class="top-actions">
     <button id="btn-undo" title="撤销上一次写操作（Ctrl+Z / Cmd+Z）">↩ 撤销 (0)</button>
     <button id="btn-redo" title="重做被撤销的操作（Ctrl+Shift+Z / Cmd+Shift+Z）">↪ 重做 (0)</button>
-    <button id="btn-ops" class="ops-capsule" title="展开全需求 Ops 清单（DDL / 网关配置 / Feature Flag）">Ops 清单 (0/0)</button>
-    <button id="btn-ext-canvas" title="切换主画布是否显示 external / collaborator / out_of_scope 节点">画布含外部</button>
+    <button id="btn-ext-canvas" title="切换主画布是否显示 external / collaborator / todo / out_of_scope 节点">画布含前置</button>
     <button id="btn-refresh" title="重新执行 status 与多仓 git diff">刷新 Diff</button>
     <button id="btn-fit" title="缩放以完整显示 DAG">适应画布</button>
-    <button id="btn-layout" title="按左细右粗重新排版 DAG">自动左到右排版</button>
+    <button id="btn-layout" title="按自然拓扑深度重新排版（milestone/e2e 钉最右）">自动左到右排版</button>
     <button id="btn-goal" title="复制 /goal 推进指令">复制 /goal 推进指令</button>
     <button id="btn-orch" title="打开 Orchestrator session">跳回 Orchestrator Session</button>
   </div>
 </header>
-<div id="ops-panel" class="ops-panel hidden"></div>
 <main id="columns">
   <section id="prd-pane" class="pane">
     <div class="pane-head">
@@ -55,18 +53,24 @@ export function renderHTML(webview: vscode.Webview, extensionUri: vscode.Uri): s
   </section>
   <section id="dag-pane" class="pane">
     <div class="pane-head">
-      <span>DAG（左细右粗）</span>
+      <span>DAG（自然拓扑）</span>
       <span class="pane-actions"><button id="btn-add-node">+ 节点</button></span>
     </div>
     <div id="external-dock">
       <div class="dock-head">
-        <button id="btn-dock-toggle" title="隐藏 / 展开外部依赖聚合栏">隐藏</button>
-        <span id="dock-count" class="dock-count">外部依赖 0/0</span>
-        <span class="dock-filters">
+        <button id="btn-dock-toggle" title="隐藏 / 展开前置依赖停靠栏">隐藏</button>
+        <span id="dock-count" class="dock-count">前置依赖 0/0</span>
+        <span class="dock-filters dock-type-filters" title="前置类型">
+          <button data-dock-type="all" class="active">全部</button>
+          <button data-dock-type="external">外部</button>
+          <button data-dock-type="todo">TODO</button>
+        </span>
+        <span class="dock-filters dock-status-filters" title="就绪状态">
           <button data-dock-filter="all" class="active">全部</button>
           <button data-dock-filter="waiting">待就绪</button>
           <button data-dock-filter="ready">已就绪</button>
         </span>
+        <button id="btn-add-todo" class="todo-add-btn" title="新建前置 TODO（DDL / 网关配置 / Feature Flag）">+ 新增 TODO</button>
         <button id="btn-redline" class="redline-capsule" title="PRD 明确本期不做，禁止 claim/bind">红线 Out-of-Scope (0)</button>
       </div>
       <div id="dock-cards" class="dock-cards"></div>

@@ -15,7 +15,7 @@ func isExternalScope(scope string) bool {
 }
 
 // mockedEdgeRef is the compact view of a mocked out-edge used by CLI output and
-// the VS Code External Dock.
+// the VS Code Prerequisite Dock.
 type mockedEdgeRef struct {
 	ID    string `json:"id"`
 	To    string `json:"to"`

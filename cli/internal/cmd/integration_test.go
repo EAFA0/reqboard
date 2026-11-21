@@ -707,3 +707,163 @@ func TestPRDIgnoreBatch(t *testing.T) {
 		t.Fatalf("unignore left = %v", dag.IgnoredPRDRefs)
 	}
 }
+
+func TestTodoCommandLifecycle(t *testing.T) {
+	f := setupCLI(t)
+	out := mustCLI(t, f.root, "todo", "add", "DDL: orders add confirmation_mode",
+		"--kind", "ddl", "--blocks", "rb-a,rb-b", "--note", "上线前执行", "--json")
+	m := jsonMap(t, out)
+	node := m["node"].(map[string]interface{})
+	todoID := node["id"].(string)
+	if node["scope"] != model.ScopeTodo || node["status"] != model.StatusPending {
+		t.Fatalf("todo node = %+v", node)
+	}
+	tags := node["tags"].([]interface{})
+	if len(tags) != 1 || tags[0] != "ddl" {
+		t.Fatalf("todo tags = %v, want [ddl]", tags)
+	}
+	edges := m["edges"].([]interface{})
+	if len(edges) != 2 {
+		t.Fatalf("edges = %v, want 2", edges)
+	}
+	dag, _ := f.store.LoadDAG()
+	if len(dag.OutEdges(todoID)) != 2 {
+		t.Fatalf("todo out edges = %+v", dag.OutEdges(todoID))
+	}
+	for _, e := range dag.OutEdges(todoID) {
+		if e.Kind != model.EdgeHard {
+			t.Fatalf("todo edge kind = %s, want hard", e.Kind)
+		}
+	}
+
+	out = mustCLI(t, f.root, "todo", "list", "--json")
+	list := jsonMap(t, out)
+	if list["total"].(float64) != 1 || list["done"].(float64) != 0 {
+		t.Fatalf("todo list = %v", list)
+	}
+	todo := list["todos"].([]interface{})[0].(map[string]interface{})
+	if todo["kind"] != "ddl" || todo["done"] != false {
+		t.Fatalf("todo list item = %+v", todo)
+	}
+	if len(todo["blocks"].([]interface{})) != 2 {
+		t.Fatalf("todo blocks = %+v", todo["blocks"])
+	}
+
+	// TODO nodes are not business coding nodes: claim/bind must be rejected.
+	if _, errOut, code := cli(t, f.root, "claim", todoID); code == 0 || !strings.Contains(errOut, "todo") {
+		t.Fatalf("todo claim not rejected: %s", errOut)
+	}
+	if _, errOut, code := cli(t, f.root, "bind", todoID, "--repo", "api", "--file", "svc/order.go", "--symbol", "CreateOrder", "--why", "x"); code == 0 || !strings.Contains(errOut, "todo") {
+		t.Fatalf("todo bind not rejected: %s", errOut)
+	}
+
+	// Default todo --hard--> mine does not block P1 start; the TODO itself is
+	// listed in waiting_todo instead of the coding queue.
+	out = mustCLI(t, f.root, "dispatch", "--max-parallel", "4", "--json")
+	plan := jsonMap(t, out)
+	items := map[string]bool{}
+	for _, raw := range plan["items"].([]interface{}) {
+		items[raw.(map[string]interface{})["node_id"].(string)] = true
+	}
+	if !items["rb-a"] || !items["rb-b"] {
+		t.Fatalf("default todo must not block P1 start: %v", plan["items"])
+	}
+	if items[todoID] {
+		t.Fatalf("todo node entered P1 queue: %v", plan["items"])
+	}
+	blocked := plan["blocked"].(map[string]interface{})
+	foundTodo := false
+	for _, raw := range blocked["waiting_todo"].([]interface{}) {
+		if raw.(map[string]interface{})["node_id"] == todoID {
+			foundTodo = true
+		}
+	}
+	if !foundTodo {
+		t.Fatalf("todo not listed in waiting_todo: %v", blocked)
+	}
+
+	// Gate 1 blocks downstream completion until the TODO is done.
+	_, errOut, code := cli(t, f.root, "done", "rb-a")
+	if code == 0 || !strings.Contains(errOut, "前置 TODO") || !strings.Contains(errOut, todoID) {
+		t.Fatalf("Gate 1 todo block missing: %s", errOut)
+	}
+
+	// done <todo> skips all code gates and unlocks the blocked downstream.
+	out = mustCLI(t, f.root, "done", todoID, "--json")
+	done := jsonMap(t, out)
+	if done["status"] != model.StatusDone || done["todo"] != true || done["prerequisite"] != true {
+		t.Fatalf("todo done = %v", done)
+	}
+	unlocked := done["unlocked"].([]interface{})
+	if len(unlocked) != 1 || unlocked[0] != "rb-a" {
+		t.Fatalf("todo unlocked = %v, want [rb-a]", unlocked)
+	}
+	mustCLI(t, f.root, "done", "rb-a", "--json")
+
+	out = mustCLI(t, f.root, "todo", "list", "--json")
+	list = jsonMap(t, out)
+	if list["done"].(float64) != 1 {
+		t.Fatalf("todo list done = %v", list["done"])
+	}
+}
+
+func TestTodoNodeUpdateStatusDoneSkipsGates(t *testing.T) {
+	f := setupCLI(t)
+	out := mustCLI(t, f.root, "todo", "add", "Gateway: allow visibility query",
+		"--kind", "gateway", "--blocks", "rb-a", "--json")
+	todoID := jsonMap(t, out)["node"].(map[string]interface{})["id"].(string)
+
+	out = mustCLI(t, f.root, "node", "update", todoID, "--status", "done", "--json")
+	m := jsonMap(t, out)
+	if m["prerequisite"] != true || m["todo"] != true {
+		t.Fatalf("node update result = %v", m)
+	}
+	node := m["node"].(map[string]interface{})
+	if node["status"] != model.StatusDone {
+		t.Fatalf("todo status = %v", node["status"])
+	}
+	unlocked := m["unlocked"].([]interface{})
+	if len(unlocked) != 1 || unlocked[0] != "rb-a" {
+		t.Fatalf("unlocked = %v", unlocked)
+	}
+	dag, _ := f.store.LoadDAG()
+	if dag.Node(todoID).Status != model.StatusDone {
+		t.Fatalf("todo not persisted as done: %+v", dag.Node(todoID))
+	}
+}
+
+func TestTodoBlockStartTagBlocksDispatch(t *testing.T) {
+	f := setupCLI(t)
+	out := mustCLI(t, f.root, "todo", "add", "DDL: orders add index",
+		"--kind", "ddl", "--blocks", "rb-a", "--tag", "block-start", "--json")
+	todoID := jsonMap(t, out)["node"].(map[string]interface{})["id"].(string)
+
+	out = mustCLI(t, f.root, "dispatch", "--max-parallel", "4", "--json")
+	plan := jsonMap(t, out)
+	for _, raw := range plan["items"].([]interface{}) {
+		if raw.(map[string]interface{})["node_id"] == "rb-a" {
+			t.Fatalf("block-start todo must keep rb-a out of P1: %v", plan["items"])
+		}
+	}
+	blocked := plan["blocked"].(map[string]interface{})
+	reason := ""
+	for _, raw := range blocked["waiting_todo"].([]interface{}) {
+		b := raw.(map[string]interface{})
+		if b["node_id"] == "rb-a" {
+			reason = b["reason"].(string)
+		}
+	}
+	if !strings.Contains(reason, "前置 TODO") || !strings.Contains(reason, todoID) || !strings.Contains(reason, "block-start") {
+		t.Fatalf("rb-a waiting_todo reason = %q", reason)
+	}
+}
+
+func TestTodoRejectsUnknownOrNonMineBlocks(t *testing.T) {
+	f := setupCLI(t)
+	if _, errOut, code := cli(t, f.root, "todo", "add", "DDL: x", "--kind", "ddl", "--blocks", "rb-ghost"); code == 0 || !strings.Contains(errOut, "unknown node") {
+		t.Fatalf("unknown blocks target not rejected: %s", errOut)
+	}
+	if _, errOut, code := cli(t, f.root, "todo", "add", "DDL: x", "--kind", "ddl", "--blocks", "rb-c"); code == 0 || !strings.Contains(errOut, "scope=mine") {
+		t.Fatalf("out_of_scope blocks target not rejected: %s", errOut)
+	}
+}

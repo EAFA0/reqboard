@@ -10,8 +10,8 @@
 | 原则 | 具体落地要求 |
 | :--- | :--- |
 | **功能/规则级拆解** | DAG 节点严格按 **业务功能 & 规则** 拆到最细，而非按仓库/接口/表拆。技术方案改了（如加枚举改拆接口、从 `service` 挪 `business`），DAG 骨架不变，只标 `stale` 并刷新挂载代码。 |
-| **反碎片化** | 多段相关 PRD 锚定到同一个功能点节点（复用 `prd_refs`）；不为纯名词解释、纯复用老逻辑（0 代码改动）或并列枚举拆孤立开发节点；只为“有独立代码增量行为 / 独立验收路径”的规则建节点。DDL / 网关配置 / Feature Flag 挂节点级 `ops` 清单，不新增 DAG 节点。 |
-| **不卡开工，只卡完结** | `mine --> mine` 依赖只卡完结、不卡开工；`external --mocked--> mine` 允许带 Mock 并行。唯一例外是 `external|collaborator --hard--> mine` 且外部未 `done`：该节点进入 `waiting_external`，先等外部就绪或显式改 `mocked`。完结仍受 4 道硬门禁拦截。 |
+| **反碎片化** | 多段相关 PRD 锚定到同一个功能点节点（复用 `prd_refs`）；不为纯名词解释、纯复用老逻辑（0 代码改动）或并列枚举拆孤立开发节点；只为“有独立代码增量行为 / 独立验收路径”的规则建节点。外部依赖、协作者与跨节点工程 TODO（DDL / 网关配置 / Feature Flag）统一为一等前置节点（`external` / `collaborator` / `todo`），不进入主画布业务网格；仅影响单个节点的历史 `ops` 清单继续兼容。 |
+| **不卡开工，只卡完结** | `mine --> mine` 依赖只卡完结、不卡开工；`external --mocked--> mine` 允许带 Mock 并行。`external|collaborator --hard--> mine` 且外部未 `done`：该节点进入 `waiting_external`，先等外部就绪或显式改 `mocked`。`todo --hard--> mine` 默认只卡下游 `done`，只有 TODO 带 `block-start` tag 时才卡 P1 开工。完结仍受 4 道硬门禁拦截。 |
 | **双向孤儿拦截** | ① **左栏抓 `Unmapped PRD`**：PRD 段落没挂任何节点（含 `out_of_scope`）自动标红，防漏拆；② **右栏抓 `Orphan Diff` & `To-Delete`**：代码改动挂不上合法功能点，或已废弃节点的旧代码没删干净，自动拎出拦截。 |
 | **CLI 即规则注入** | 不依赖数百行易衰减的 Prompt；通过 `reqboard` CLI 的 stdout/stderr 在最新一轮工具调用中**实时注入 PRD 原文切片、禁区列表、人工最新标注与报错纠偏指令**。 |
 | **人类直写零延迟** | 页面拖拽画布、建节点、连边、改状态、写备注、Review 打回**毫秒级直写本地文件**，不经由 Agent 对话中转；人类修改拥有最高优先级并自动告警后台 Agent。 |
@@ -48,7 +48,7 @@ flowchart LR
 
     subgraph UI["VS Code 扩展: 三栏联动看板"]
         P1["左栏: prd.md 原文 (覆盖率热力 + 双向定位)"]
-        P2["中栏: 左细右粗 DAG 画布 (人类直改/拖拽 + Worker状态灯)"]
+        P2["中栏: 自然拓扑 DAG 画布 (人类直改/拖拽 + Worker状态灯)"]
         P3["右栏: 按节点过滤的多仓 Diff + Orphan/To-Delete 桶"]
         FG["focused-git Diff 视图 (原生 gopls / diff跳diff)"]
     end
@@ -169,9 +169,24 @@ flowchart LR
   * `mine`：我方负责实现，允许 `claim` 和 `bind`。
   * `collaborator`：协作者负责（如同事 Alice），**禁止 Agent 修改代码**，可记录外部进度。
   * `external`：外部联调方依赖（如 AuthService / PaymentGateway / 合同），**禁止 Agent 修改代码**，用作上游依赖与 Mock 边起点。
+  * `todo`：一等工程前置（DDL / 网关配置 / Feature Flag / 其他），**不是业务写码节点**；禁止 `claim` / `bind`，`done <todo-id>` 或 `node update <todo-id> --status done` 跳过代码门禁，直接完结并解锁下游。默认只阻塞下游 `done`；带 `block-start` tag 时同时阻塞 P1 开工。
   * `out_of_scope`：PRD 明确不在本期范围的红线项（如退订/退款），**硬拦截任何 `claim`/`bind`**，专门防止 AI 脑补。
 * **短哈希 ID**：采用 4~6 位确定性短哈希（如 `rb-7a2c`），多 Agent 并发 `propose` 不撞车。
-* **节点级 `ops` 清单**：每项 `{ id, kind: "ddl"|"gateway"|"flag"|"other", title, done, note }`。它是节点内的轻量交付清单，用于 DDL / 网关配置 / Feature Flag 等不构成独立功能点的动作，**不污染 DAG 节点数**；看板节点卡片、右栏与顶栏 `Ops 清单 (done/total)` 胶囊共同读写。
+* **节点级 `ops` 清单（兼容保留）**：每项 `{ id, kind: "ddl"|"gateway"|"flag"|"other", title, done, note }`。仅用于只影响单个节点的轻量交付动作，看板节点编辑弹层仍可勾选/增删；跨节点、需要 1→N 阻塞的工程动作请改用一等 `todo` 节点，避免把前置依赖藏进业务节点。
+* **`todo` 一等前置**：`reqboard todo add "<title>" [--kind ddl|gateway|flag|other] [--blocks <n1,n2,...>] [--note "..."]` 创建 `scope: "todo"` 节点，`--kind` 自动写入 tags，`--blocks` 自动生成 `hard` 边；`reqboard todo list [--json]` 查看完成状态与阻塞下游。看板顶部 Prerequisite Dock 统一管理 `external` / `collaborator` / `todo`。
+* **一等前置 TODO 示例**：
+  ```json
+  {
+    "id": "rb-todo",
+    "title": "DDL: orders add confirmation_mode",
+    "scope": "todo",
+    "status": "pending",
+    "tags": ["ddl"],
+    "description": "上线前执行",
+    "prd_refs": []
+  }
+  ```
+  边 `rb-todo --hard--> rb-vis` / `rb-query` 表示 1→2 阻塞；默认只卡下游 `done`，`tags` 加 `block-start` 才同时卡 P1 开工。
 * **误建节点删除**：`reqboard node delete <id>` 直接删除节点与关联边；若仍有 `bindings` 则默认拒绝并提示改用 `deprecate`（保留 To-Delete 残骸追踪），确认误建后加 `--force` 连同 bindings 删除。
 * **撤销 / 重做**：每次写 `dag.json` / `bindings.json` / `config.json` 前自动把前态快照写入 `.reqboard/.undo/`（最多 20 步）；`undo` / `redo` 在 `flock` 内原子完成，`status --json` 返回 `undo_depth` / `redo_depth`。`reqboard init` 生成 `.reqboard/.gitignore` 忽略 `.undo/` 与 `.lock`，避免快照被当成代码改动。
 
@@ -237,7 +252,7 @@ flowchart LR
 
 | 边类型 (`kind`) | 画布视觉 | 语义与门禁行为 |
 | :--- | :--- | :--- |
-| **`hard`** | 灰色/蓝色实线 | 正常真实依赖。不卡下游开工，但 **`from` 未 `done` 时，`to` 锁死不能标 `done`**。 |
+| **`hard`** | 灰色/蓝色实线 | 正常真实依赖。`mine --> mine` 不卡下游开工；`external|collaborator --hard--> mine` 且上游未 done 时卡 P1 开工；`todo --hard--> mine` 默认只卡下游完结（TODO 带 `block-start` tag 才卡 P1 开工）。无论哪种，`from` 未 `done` 时 `to` 锁死不能标 `done`。 |
 | **`mocked`** | **橙色虚线 + `mock` 胶囊** | **“链路方案未定/外部未 ready，先靠 Mock 绕过”**。悬停/点击直接编辑备注（如*“因方案未确认，这条链路先 mock”*）。① Agent `claim` 下游时自动注入该备注；② **存在任意 `mocked` 入边时，下游锁死不能标 `done`**；③ 人类点击切回 `hard` 时，下游自动标 `stale` 提醒拆 Mock。 |
 | **`stale`** | 黄色高亮虚线 | 上游节点方案刚改，该对接契约待重核；同样阻塞下游 `done`。 |
 | **`discovered`** | 细灰点线 | 非阻断溯源边（记录 Agent 做 A 时发现的新边界 B）。 |
@@ -270,10 +285,12 @@ stateDiagram-v2
 
 > [!IMPORTANT]
 > **`reqboard done <id>` 四道硬门禁**（面向 Agent 强制拦截，任一不满足非 0 退出；人类在 UI 上保留显式强制覆盖权）：
-> 1. **前置完结**：所有入边（`hard` / `mocked` / `stale`）对应的上游节点均已处于 `done` 状态；
+> 1. **前置完结**：所有入边（`hard` / `mocked` / `stale`）对应的上游节点均已处于 `done` 状态；若上游是 `todo`，错误信息会明确提示“前置 TODO 未完成”并给出 `reqboard done <todo-id>` 纠偏命令；
 > 2. **零 Mock 债**：该节点所有入边均已切回 `hard`（无橙色虚线），且本节点 `self_mocks` 为空、无未清理的 `role: "mock"` 绑定；
 > 3. **非陈旧 & 无未闭环批注**：`stale == false`，且 `review_notes` 中无 `status == "open"` 的未解决批注；
 > 4. **代码干净**：`reqboard check --node <id>` 无 `Broken Binding`，且该节点关联符号无未归因 `Orphan Diff`。
+>
+> **前置节点例外**：`external` / `collaborator` / `todo` 没有我方代码，`done <id>` 与 `node update <id> --status done` 跳过上述 4 道门禁，直接记录就绪并解锁下游；`--unmock-downstream` 可同时把 mocked 出边切回 hard 并标下游 `stale`。
 
 ### 4.3 废弃节点的“残骸回收”机制
 当你在画布上把一个节点标为 `deprecated`（例如推翻了 `VisibilityScope` 方案）：
@@ -290,10 +307,11 @@ CLI 是 coding agent 操作看板的唯一入口（建议用 Go 或 Node/TS 编�
 | :--- | :--- | :--- |
 | **`prd init / sync`** | `reqboard prd sync ./new_prd.md` | 注入/对齐锚点；打印变动段落、自动标 `stale` 的受影响节点清单、新增的 `Unmapped PRD`。 |
 | **`plan import`** | `reqboard plan import plan.json` | 校验 DAG 无环、无悬空边、每个业务叶子节点均有合法 `prd_refs`；输出 PRD 覆盖率报告。 |
-| **`dispatch`** | `reqboard dispatch --max-parallel 4` | **Goal Orchestrator 核心调度原语**：确定性计算当前可并发推进的节点队列（按 P0 修复/残骸 → P1 左侧优先开发 → P2 闭环快审排序，自动规避租约冲突与熔断节点）；`external|collaborator --hard--> mine` 且外部未 done 的节点不进入 P1，归入 `waiting_external`；无可推进项时返回 `QUIESCENT` 与分类阻塞清单。 |
-| **`claim`** | `reqboard claim rb-7a2c --lease "order_query:src/esdao/**"` | ① 若目标为 `out_of_scope`/`external`/`proposed`/`hold`，**直接拒绝并报错**；② 成功时打印：**锚定 PRD 原文全文 + 关联 `out_of_scope` 红线 + 所有入边状态及 `mocked` 人工备注 + 未解决的 `review_notes` + `[人工最新调整]` 变更提示**。 |
+| **`dispatch`** | `reqboard dispatch --max-parallel 4` | **Goal Orchestrator 核心调度原语**：确定性计算当前可并发推进的节点队列（按 P0 修复/残骸 → P1 左侧优先开发 → P2 闭环快审排序，自动规避租约冲突与熔断节点）；`external|collaborator --hard--> mine` 且外部未 done 的节点不进入 P1，归入 `waiting_external`；`todo` 节点自身不进入 P1，归入 `waiting_todo`，且 `todo --hard--> mine` 默认不卡 P1（仅 `block-start` tag 才卡）；无可推进项时返回 `QUIESCENT` 与分类阻塞清单。 |
+| **`claim`** | `reqboard claim rb-7a2c --lease "order_query:src/esdao/**"` | ① 若目标为 `out_of_scope`/`external`/`collaborator`/`todo`/`proposed`/`hold`，**直接拒绝并报错**；② 成功时打印：**锚定 PRD 原文全文 + 关联 `out_of_scope` 红线 + 所有入边状态及 `mocked` 人工备注 + 未解决的 `review_notes` + `[人工最新调整]` 变更提示**。 |
 | **`bind`** | `reqboard bind rb-7a2c --repo order_query --file ... --symbol ... [--partial "..."] [--role impl\|mock\|test] --why "..."`<br>`reqboard bind rb-7a2c --repo order_query --file ... --all-symbols [--keep-status] --why "..."` | 写入 `bindings.json`；若 `--why` 为空或符号在当前文件不存在，**报错并提示真实可选符号名**。`--all-symbols` 扫描该文件相对 base 的全部改动符号并一次绑定，减少大仓库逐符号调用；`--keep-status` 仅登记代码，不把 `pending` 隐式改为 `in_progress`。 |
-| **`ops`** | `reqboard ops add <node_id> --kind ddl\|gateway\|flag\|other --title "..." [--note "..."]`<br>`reqboard ops toggle\|remove <node_id> <op_id>` | 维护节点级轻量交付清单，不新增 DAG 节点；看板节点卡片、右栏与顶栏胶囊共用。 |
+| **`ops`** | `reqboard ops add <node_id> --kind ddl\|gateway\|flag\|other --title "..." [--note "..."]`<br>`reqboard ops toggle\|remove <node_id> <op_id>` | 兼容保留的节点级轻量交付清单；看板节点编辑弹层仍可勾选/增删。跨节点或需要 1→N 阻塞的工程动作请改用 `todo`。 |
+| **`todo`** | `reqboard todo add "<title>" [--kind ddl\|gateway\|flag\|other] [--blocks <n1,n2,...>] [--note "..."]`<br>`reqboard todo list [--json]` | 创建一等 `scope: "todo"` 前置节点：`--kind` 写入 tags，`--blocks` 自动创建 `hard` 边；`todo list` 输出完成状态与阻塞下游。`done <todo-id>` / `node update <todo-id> --status done` 跳过代码门禁并解锁下游。 |
 | **`node delete`** | `reqboard node delete <id> [--force]` | 删除误建节点及关联边。无 bindings 直接删；有 bindings 时默认拒绝并提示 `deprecate` 或 `--force`；`--force` 连同 bindings 与关联边一并删除。 |
 | **`undo / redo`** | `reqboard undo` / `reqboard redo` | 在 `.reqboard/.undo/` 最多 20 步前态快照间回滚/恢复；写操作前自动快照，`status --json` 返回 `undo_depth` / `redo_depth`。 |
 | **`propose`** | `reqboard propose --from rb-7a2c --prd-ref p:3.5-1 --title "..." --reason "..."` | 在 DAG 创建虚线 `proposed` 节点并连 `discovered` 边；输出明确指令：**“节点已提交待 owner 审批，请勿在审批前修改该部分代码”**。 |
@@ -301,7 +319,7 @@ CLI 是 coding agent 操作看板的唯一入口（建议用 Go 或 Node/TS 编�
 | **`filter`** | `reqboard filter show --json` / `reqboard filter set --include "src/**, *.go" --exclude "vendor/**" --exclude-tests=true` | 读写 `.reqboard/config.json` 的 Diff 过滤规则（单测排除、Include / Exclude glob），并追加 `events.jsonl`；CLI 与 VS Code 右栏共用。 |
 | **`check`** | `reqboard check --node rb-7a2c` / `reqboard check --all` | **多仓真实 Diff 对账**（详见第 6 节）：<br>• `--node` 仅审计本节点健康度（避免误伤并发队友的活跃租约）；<br>• `--all` 扫全盘，列出全部 **`Orphan Diff`**、**`To-Delete 残骸`**、**`Broken Binding`**，每条均附带精确纠偏命令。 |
 | **`review-pack`** | `reqboard review-pack rb-7a2c` | 导出极简数据包：`[节点 PRD 片段] + [节点关联 Diff]`，可直接喂给独立轻模型做“反膨胀/塞私货”快审。 |
-| **`done`** | `reqboard done rb-7a2c --evidence "trace_id:0217..."` / `reqboard done rb-ext --unmock-downstream` | `mine` 节点执行 4 道完结硬门禁；外部/协作者节点无我方代码门禁，可直接标记 `done`（也支持切回 `pending`）。`--unmock-downstream` 会把该外部节点的 mocked 出边切回 `hard`，并把下游 `mine` 标 `stale`。失败时逐条列出缺口（如“阻断：入边 `ed-4e8a` 仍处于 `mocked` 状态（AuthService 方案未确认）”）。 |
+| **`done`** | `reqboard done rb-7a2c --evidence "trace_id:0217..."` / `reqboard done rb-ext --unmock-downstream` / `reqboard done rb-todo` | `mine` 节点执行 4 道完结硬门禁；`external` / `collaborator` / `todo` 前置节点无我方代码门禁，可直接标记 `done`（也支持切回 `pending`）。`--unmock-downstream` 会把前置节点的 mocked 出边切回 `hard`，并把下游 `mine` 标 `stale`。失败时逐条列出缺口（如“前置 TODO 未完成：入边 `ed-4e8a` 的 TODO 节点 `rb-todo` 仍为 `pending`”）。 |
 
 **报错即规则注入示例**（Agent 试图越界或乱标完成时的真实终端反馈）：
 ```text
@@ -350,7 +368,8 @@ CLI 是 coding agent 操作看板的唯一入口（建议用 Go 或 Node/TS 编�
    * `stale`（PRD 更新或上游方案刚变、或橙色 `mocked` 边刚切回 `hard` 需要拆 Mock 的节点）。
 2. **P1（并行功能实施）**：
    * `scope == "mine"`、`status == "pending"`、`hold == false` 的节点；
-   * **“不卡开工”的边界**：`mine --> mine` 不卡开工；`external|collaborator --mocked--> mine` 可带 Mock 并行（备注自动通过 `claim` 注入）。但 `external|collaborator --hard--> mine` 且外部未 `done` 时，节点不进入 P1，归入 `waiting_external`，并提示等待外部 done 或显式改 `mocked`；
+   * **“不卡开工”的边界**：`mine --> mine` 不卡开工；`external|collaborator --mocked--> mine` 可带 Mock 并行（备注自动通过 `claim` 注入）。`external|collaborator --hard--> mine` 且外部未 `done` 时，节点不进入 P1，归入 `waiting_external`，并提示等待外部 done 或显式改 `mocked`；`todo --hard--> mine` 默认不卡 P1（DDL 未跑完也可以先写代码和单测），只有 TODO 带 `block-start` tag 时才进入 `waiting_todo` 并卡开工；
+   * `todo` 节点自身永远不进入 P1 写码队列，统一归入 `waiting_todo` 前置清单；
    * 排序权重：**越靠左（入度低 / 下游扇出高）优先**，先打通核心底座和原子规则。
 3. **P2（自动快审与完结收口）**：
    * `status == "implemented"` 且无活跃 `review_notes` → 派发独立轻量化 Worker 跑 `review-pack` 反膨胀预检；
@@ -360,6 +379,7 @@ CLI 是 coding agent 操作看板的唯一入口（建议用 Go 或 Node/TS 编�
      * `waiting_approval`：待你在看板批复的 `proposed` 节点；
      * `waiting_review`：已实现/过预检、待你按节点 Review 的项；
      * `waiting_external`：外部/协作者节点未就绪，或 `external --hard--> mine` 卡住开工的项；`mocked` 边只影响 done，不阻塞开工；
+     * `waiting_todo`：DDL / 网关配置 / Feature Flag 等前置 TODO 未完成；默认只卡下游 done，带 `block-start` 时也卡开工；
      * `circuit_broken`：自动熔断需人工拍板的异常项。
    * Orchestrator 收到 `QUIESCENT` 后**立刻输出精简阻塞摘要（可选同步发一条精简消息到 `agent-relay`）并优雅挂起/停止**，绝不空转烧 token。
 
@@ -381,9 +401,9 @@ CLI 是 coding agent 操作看板的唯一入口（建议用 Go 或 Node/TS 编�
 
 | 区域 | 承载内容 | 核心高频人类交互（全部直写 `.reqboard/`） |
 | :--- | :--- | :--- |
-| **顶部状态条** | Goal Orchestrator 实时运行态 | • 显示 `Running (3 workers active)` / `Quiescent (待人工介入 N 项)`；<br>• `[↩ 撤销 (N)]` / `[↪ 重做 (N)]` 显示可用步数，绑定 `Ctrl+Z` / `Cmd+Z` 与 `Ctrl+Shift+Z` / `Cmd+Shift+Z`（输入框聚焦时不拦截浏览器原生撤销）；<br>• `Ops 清单 (done/total)` 折叠胶囊汇总全需求未完成的 DDL / 网关配置 / Feature Flag，支持直接勾选与跳转所属节点；<br>• 一键复制 `/goal` 启动命令或通过可配置的 session link（`reqboard.sessionLinkTemplate`）直达主 Orchestrator session。 |
+| **顶部状态条** | Goal Orchestrator 实时运行态 | • 显示 `Running (3 workers active)` / `Quiescent (待人工介入 N 项)`；<br>• `[↩ 撤销 (N)]` / `[↪ 重做 (N)]` 显示可用步数，绑定 `Ctrl+Z` / `Cmd+Z` 与 `Ctrl+Shift+Z` / `Cmd+Shift+Z`（输入框聚焦时不拦截浏览器原生撤销）；<br>• 旧 `Ops 清单` 独立抽屉按钮已移除，DDL / 网关配置 / Feature Flag 全部收敛进顶部统一 **Prerequisite Dock**；<br>• 一键复制 `/goal` 启动命令或通过可配置的 session link（`reqboard.sessionLinkTemplate`）直达主 Orchestrator session。 |
 | **左栏（PRD 原文）** | Webview 渲染 `prd.md` | • 段落左侧彩色覆盖条（已覆盖绿 / `out_of_scope` 灰 / **`Unmapped PRD` 浅红**）；<br>• 划选任意段落右键 → **“一键新建 DAG 节点并锚定”** 或 **“标为背景忽略”**；<br>• 点击任意段落 → 中栏高亮对应节点；点击中栏节点 → 左栏自动滚动高亮原文。 |
-| **中栏（DAG 画布）** | Webview（原生 SVG/DOM + `reqboard layout` 左到右分层） | • 主画布默认只渲染我方主干（`mine` / `proposed`）；上方 **External Dock** 聚合 `external` / `collaborator`，`out_of_scope` 收进红线胶囊；<br>• 勾选「画布含外部」后，`board.js` 与 `reqboard layout --include-external` 把 `external` / `collaborator` 排到最左 Column 0 源头列，自然融入左到右拓扑；<br>• **左细右粗**自动分层，支持自由拖拽微调坐标；<br>• 节点卡片底部显示紧凑 `ops` 徽标（未完橙色 `DDL` / `Flag`，已完绿色 `✓DDL`）；<br>• 双击空白建节点、拖锚点连边、点击节点/边原地改状态、写备注、或勾选 `hold` 暂停自动推进；<br>• 节点编辑弹层与右栏提供 `[删除]`；无绑定直接删，有绑定弹窗区分「标为废弃」与「强制删除」；选中画布节点且非输入态按 `Delete` / `Backspace` 快捷删除，误删可 `Ctrl+Z` 一键还原；<br>• 橙色虚线（`mocked`）与节点上的外部依赖小胶囊；点击切回实线自动触发下游 `stale`；<br>• 悬停/点击外部卡片联动高亮依赖它的我方节点，反之点击节点高亮 Dock 卡片；<br>• 虚线 `proposed` 节点卡片直接带 **`[批准]` / `[驳回]`** 按钮；<br>• 正在被 Worker 跑的节点带动态运行徽标，卡片显示 `scope`、`status`、跨仓 `+add/-del`、可配置的 session link 跳转链接。 |
+| **中栏（DAG 画布）** | Webview（原生 SVG/DOM + `reqboard layout` 自然拓扑分层） | • 主画布默认只渲染我方主干（`mine` / `proposed`），保持 100% 纯业务功能树；顶部 **Prerequisite Dock** 统一收纳 `external` / `collaborator` / `todo`，`out_of_scope` 收进红线胶囊；<br>• Dock 顶条：`前置依赖 done/total` + 类型筛选 `[全部] [外部] [TODO]` + 状态筛选 `[待就绪] [已就绪]` + `[+ 新增 TODO]` + `[隐藏/展开]` + 右侧 `红线 Out-of-Scope (N)`；<br>• `[+ 新增 TODO]` 极简浮层：标题、类型（DDL / 网关 / Flag / 其他）、可选勾选下游我方节点，回车创建并自动连 `hard` 边；<br>• 每张 TODO 卡片显示类型色标、标题、影响下游数 `→ N`、`[✓ Done]`；悬停/点击高亮全部被阻塞下游并淡化其他节点，点击卡片可编辑标题/类型/备注或删除；<br>• 主画布按**自然拓扑深度（ASAP）**左→右展开，保留真实链路长短；仅带 `milestone` / `e2e` tag 的终结业务场景节点钉在最右终列；<br>• 勾选「画布含前置」后，`board.js` 与 `reqboard layout --include-external` 把 `external` / `collaborator` / `todo` 全部排到最左 Column 0 源头列，自然融入左到右拓扑；<br>• 节点卡片以紧凑胶囊显示所挂前置：`等:DDL` / `✓DDL` / `mock:Auth`，点击直接编辑对应连线；<br>• 双击空白建节点、拖锚点连边、点击节点/边原地改状态、写备注、或勾选 `hold` 暂停自动推进；<br>• 节点编辑弹层与右栏提供 `[删除]`；无绑定直接删，有绑定弹窗区分「标为废弃」与「强制删除」；选中画布节点且非输入态按 `Delete` / `Backspace` 快捷删除，误删可 `Ctrl+Z` 一键还原；<br>• 橙色虚线（`mocked`）与节点上的前置依赖小胶囊；点击切回实线自动触发下游 `stale`；<br>• 虚线 `proposed` 节点卡片直接带 **`[批准]` / `[驳回]`** 按钮；<br>• 正在被 Worker 跑的节点带动态运行徽标，卡片显示 `scope`、`status`、跨仓 `+add/-del`、可配置的 session link 跳转链接。 |
 | **右栏（按节点过滤 Diff）** | Webview 侧栏或 VS Code TreeView + 原生 Diff 编辑器 | • 顶部常驻两个警戒桶：**`[Orphan Diff (N)]`** 和 **`[To-Delete 残骸 (M)]`**；<br>• 选中任意节点 → 仅列出该节点挂载的多仓文件与符号（附带 `--why` 理由）；<br>• 点击文件/符号 → 直接调用 **`vscode.commands.executeCommand('focusedGit.openFileComparison', uri)`** 并定位到对应符号行，在熟悉的多仓 Diff 视图里继续 `diff 跳 diff` 和 `Ctrl+-` 返回；<br>• 节点卡片内置 **`[Reviewed 通过]`** 和 **`[打回 + 写批注]`**，直接写入 `review_notes` 供下一波 Orchestrator 自动派发修复。 |
 
 ### 8.2 人机并发防踩踏机制

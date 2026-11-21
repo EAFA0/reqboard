@@ -42,6 +42,32 @@ func TestGate1UpstreamNotDone(t *testing.T) {
 	}
 }
 
+func TestGate1PrerequisiteTodoNotDone(t *testing.T) {
+	d, b := baseDAG()
+	todo := &model.Node{ID: "rb-todo", Title: "DDL: orders add confirmation_mode", Scope: model.ScopeTodo, Status: model.StatusPending, Tags: []string{"ddl"}}
+	d.AddNode(todo)
+	d.AddEdge(&model.Edge{ID: "ed-2", From: "rb-todo", To: "rb-b", Kind: model.EdgeHard})
+
+	vs := Evaluate(d, b, &audit.Report{}, "rb-b")
+	var found *Violation
+	for i := range vs {
+		if vs[i].Code == "upstream_not_done" && strings.Contains(vs[i].Message, "前置 TODO") {
+			found = &vs[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("Gate 1 should explicitly report the unfinished prerequisite TODO: %+v", vs)
+	}
+	if !strings.Contains(found.Correction, "reqboard done rb-todo") {
+		t.Fatalf("todo correction = %q", found.Correction)
+	}
+
+	todo.Status = model.StatusDone
+	if vs := Evaluate(d, b, &audit.Report{}, "rb-b"); len(vs) != 0 {
+		t.Fatalf("done todo should satisfy Gate 1: %+v", vs)
+	}
+}
+
 func TestGate2MockDebt(t *testing.T) {
 	d, b := baseDAG()
 	d.Edges[0].Kind = model.EdgeMocked

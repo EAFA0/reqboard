@@ -56,7 +56,7 @@ test('findSymbolLine handles func/method/type', () => {
 test('package.json declares the board command and main entry', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
   assert.strictEqual(pkg.main, './dist/extension.js');
-  assert.strictEqual(pkg.version, '0.2.0');
+  assert.strictEqual(pkg.version, '0.2.1');
   const commands = (pkg.contributes.commands || []).map((c) => c.command);
   assert.ok(commands.includes('reqboard.openBoard'));
   assert.ok(fs.existsSync(path.join(__dirname, '..', 'dist', 'extension.js')));
@@ -74,22 +74,30 @@ test('webview renders PRD table rows and reserves long-title height', () => {
   assert.ok(webview.includes('btn-fit'));
 });
 
-test('external dock aggregates external deps and keeps main canvas clean', () => {
+test('prerequisite dock aggregates external/collaborator/todo and keeps main canvas clean', () => {
   const js = fs.readFileSync(path.join(__dirname, '..', 'media', 'board.js'), 'utf8');
-  assert.ok(js.includes('function renderExternalDock'));
+  assert.ok(js.includes('function renderDock'));
   assert.ok(js.includes('data-ext-done'));
   assert.ok(js.includes('data-ext-edge'));
   assert.ok(js.includes('dockFilter'));
+  assert.ok(js.includes('dockType'));
   assert.ok(js.includes('showExternalCanvas'));
   assert.ok(js.includes('function applyExternalHighlight'));
   assert.ok(js.includes('function openUnmockConfirm'));
+  assert.ok(js.includes('function openTodoAdd'));
+  assert.ok(js.includes('todo.add'));
   assert.ok(js.includes('external-focus'));
+  assert.ok(!js.includes('function renderOpsPanel'), 'legacy ops drawer should be removed');
   const webview = fs.readFileSync(path.join(__dirname, '..', 'dist', 'webview.js'), 'utf8');
   assert.ok(webview.includes('external-dock'));
   assert.ok(webview.includes('btn-ext-canvas'));
+  assert.ok(webview.includes('btn-add-todo'));
+  assert.ok(webview.includes('data-dock-type'));
   assert.ok(webview.includes('btn-redline'));
+  assert.ok(!webview.includes('btn-ops'), 'topbar ops drawer button should be removed');
   const panel = fs.readFileSync(path.join(__dirname, '..', 'dist', 'boardPanel.js'), 'utf8');
   assert.ok(panel.includes('unmock-downstream'));
+  assert.ok(panel.includes('todo.add'));
 });
 
 test('webview assets are self-contained (no CDN)', () => {

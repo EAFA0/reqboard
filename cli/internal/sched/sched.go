@@ -38,6 +38,7 @@ type Blocked struct {
 	WaitingApproval     []Blocker `json:"waiting_approval"`
 	WaitingReview       []Blocker `json:"waiting_review"`
 	WaitingExternal     []Blocker `json:"waiting_external"`
+	WaitingTodo         []Blocker `json:"waiting_todo"`
 	WaitingVerification []Blocker `json:"waiting_verification"`
 	CircuitBroken       []Blocker `json:"circuit_broken"`
 	OutOfScope          []Blocker `json:"out_of_scope"`
@@ -90,6 +91,7 @@ func Compute(dag *model.DAG, bindings *model.Bindings, rep *audit.Report, opts O
 			WaitingApproval:     []Blocker{},
 			WaitingReview:       []Blocker{},
 			WaitingExternal:     []Blocker{},
+			WaitingTodo:         []Blocker{},
 			WaitingVerification: []Blocker{},
 			CircuitBroken:       []Blocker{},
 			OutOfScope:          []Blocker{},
@@ -180,9 +182,12 @@ func Compute(dag *model.DAG, bindings *model.Bindings, rep *audit.Report, opts O
 		// External hard dependencies gate the start of work: waiting for the
 		// real counterpart is cheaper than writing throwaway integration code.
 		// A mocked edge is an explicit decision to parallelize on a stub, so it
-		// stays dispatchable (done gates still apply).
-		if n.Status == model.StatusPending && externalHardBlocker(dag, n.ID) != "" {
-			continue
+		// stays dispatchable (done gates still apply). TODO dependencies only
+		// gate startup when the TODO carries the `block-start` tag.
+		if n.Status == model.StatusPending {
+			if reason, _ := startBlocker(dag, n.ID); reason != "" {
+				continue
+			}
 		}
 		p1 = append(p1, n)
 	}
@@ -316,6 +321,8 @@ func Compute(dag *model.DAG, bindings *model.Bindings, rep *audit.Report, opts O
 			p.Blocked.WaitingApproval = append(p.Blocked.WaitingApproval, b)
 		case "external":
 			p.Blocked.WaitingExternal = append(p.Blocked.WaitingExternal, b)
+		case "todo":
+			p.Blocked.WaitingTodo = append(p.Blocked.WaitingTodo, b)
 		case "circuit":
 			p.Blocked.CircuitBroken = append(p.Blocked.CircuitBroken, b)
 		case "verification":
@@ -350,6 +357,10 @@ func Compute(dag *model.DAG, bindings *model.Bindings, rep *audit.Report, opts O
 			addBlock("external", n, fmt.Sprintf("scope=%s，需外部/协作者推进", n.Scope))
 			continue
 		}
+		if n.Scope == model.ScopeTodo {
+			addBlock("todo", n, "前置 TODO（DDL / 网关配置 / Feature Flag）未完成；完成后 `reqboard done "+n.ID+"` 解锁下游")
+			continue
+		}
 		if n.Status == model.StatusInProgress || n.Status == model.StatusMocked {
 			continue // active
 		}
@@ -357,8 +368,12 @@ func Compute(dag *model.DAG, bindings *model.Bindings, rep *audit.Report, opts O
 			continue
 		}
 		if n.Scope == model.ScopeMine && n.Status == model.StatusPending {
-			if reason := externalHardBlocker(dag, n.ID); reason != "" {
-				addBlock("external", n, reason)
+			if reason, isTodo := startBlocker(dag, n.ID); reason != "" {
+				cat := "external"
+				if isTodo {
+					cat = "todo"
+				}
+				addBlock(cat, n, reason)
 				continue
 			}
 		}
@@ -379,8 +394,10 @@ func Compute(dag *model.DAG, bindings *model.Bindings, rep *audit.Report, opts O
 					cat = "external"
 				}
 				if v.Code == "upstream_not_done" {
-					up := dag.Node(edgeFrom(dag, n.ID))
-					if up != nil && (up.Scope == model.ScopeExternal || up.Scope == model.ScopeCollaborator) {
+					switch firstUndoneUpstreamScope(dag, n.ID) {
+					case model.ScopeTodo:
+						cat = "todo"
+					case model.ScopeExternal, model.ScopeCollaborator:
 						cat = "external"
 					}
 				}
@@ -395,6 +412,7 @@ func Compute(dag *model.DAG, bindings *model.Bindings, rep *audit.Report, opts O
 	sortBlockers(p.Blocked.WaitingApproval)
 	sortBlockers(p.Blocked.WaitingReview)
 	sortBlockers(p.Blocked.WaitingExternal)
+	sortBlockers(p.Blocked.WaitingTodo)
 	sortBlockers(p.Blocked.WaitingVerification)
 	sortBlockers(p.Blocked.CircuitBroken)
 	sortBlockers(p.Blocked.OutOfScope)
@@ -423,12 +441,12 @@ func isVerificationNode(n *model.Node) bool {
 	return false
 }
 
-// externalHardBlocker explains why a mine node cannot start yet: it has a hard
-// in-edge from an external/collaborator node that is not done. Mocked edges are
-// deliberately excluded — they are the "develop in parallel behind a stub"
-// escape hatch. Internal mine -> mine edges never block the start either; they
-// only block completion.
-func externalHardBlocker(dag *model.DAG, nodeID string) string {
+// startBlocker explains why a mine node cannot start yet. External/collaborator
+// hard dependencies always block startup; TODO hard dependencies only block
+// startup when tagged `block-start` (otherwise they gate completion only).
+// Mocked edges are deliberately excluded — they are the "develop in parallel
+// behind a stub" escape hatch. Internal mine -> mine edges never block startup.
+func startBlocker(dag *model.DAG, nodeID string) (reason string, isTodo bool) {
 	var reasons []string
 	for _, e := range dag.InEdges(nodeID) {
 		if e.Kind != model.EdgeHard {
@@ -438,18 +456,44 @@ func externalHardBlocker(dag *model.DAG, nodeID string) string {
 		if from == nil {
 			continue
 		}
-		if from.Scope != model.ScopeExternal && from.Scope != model.ScopeCollaborator {
-			continue
-		}
 		if from.Status == model.StatusDone || from.Status == model.StatusDeprecated {
 			continue
 		}
-		reasons = append(reasons, fmt.Sprintf(
-			"等待外部节点 %s (%s) 标记 done，或将该边改为 mocked 后再并行开发",
-			from.ID, from.Title,
-		))
+		switch from.Scope {
+		case model.ScopeExternal, model.ScopeCollaborator:
+			reasons = append(reasons, fmt.Sprintf(
+				"等待外部节点 %s (%s) 标记 done，或将该边改为 mocked 后再并行开发",
+				from.ID, from.Title,
+			))
+		case model.ScopeTodo:
+			if !from.HasTag("block-start") {
+				continue
+			}
+			isTodo = true
+			reasons = append(reasons, fmt.Sprintf(
+				"等待前置 TODO %s (%s) 完成（tag block-start 阻塞开工）；完成后 `reqboard done %s`",
+				from.ID, from.Title, from.ID,
+			))
+		}
 	}
-	return strings.Join(reasons, "；")
+	return strings.Join(reasons, "；"), isTodo
+}
+
+// firstUndoneUpstreamScope returns the scope of the first not-done blocking
+// upstream. It is used to classify Gate-1 violations into the right blocked
+// bucket (external vs todo).
+func firstUndoneUpstreamScope(dag *model.DAG, nodeID string) string {
+	for _, e := range dag.InEdges(nodeID) {
+		if !model.BlockingEdge(e.Kind) {
+			continue
+		}
+		from := dag.Node(e.From)
+		if from == nil || from.Status == model.StatusDone {
+			continue
+		}
+		return from.Scope
+	}
+	return ""
 }
 
 func isDeferred(def []Item, id string) bool {
@@ -459,15 +503,6 @@ func isDeferred(def []Item, id string) bool {
 		}
 	}
 	return false
-}
-
-func edgeFrom(dag *model.DAG, to string) string {
-	for _, e := range dag.InEdges(to) {
-		if model.BlockingEdge(e.Kind) {
-			return e.From
-		}
-	}
-	return ""
 }
 
 func sortBlockers(bs []Blocker) {

@@ -185,14 +185,16 @@ func runStatus(a *Args, rest []string) *Error {
 		sb.WriteString(strings.Join(parts, ", ") + "\n")
 	}
 	if dispatchPlan.Status == "QUIESCENT" {
-		sb.WriteString(fmt.Sprintf("  Dispatch: QUIESCENT (waiting_approval=%d, waiting_review=%d, waiting_external=%d, waiting_verification=%d, circuit_broken=%d, out_of_scope=%d)\n",
+		sb.WriteString(fmt.Sprintf("  Dispatch: QUIESCENT (waiting_approval=%d, waiting_review=%d, waiting_external=%d, waiting_todo=%d, waiting_verification=%d, circuit_broken=%d, out_of_scope=%d)\n",
 			len(dispatchPlan.Blocked.WaitingApproval), len(dispatchPlan.Blocked.WaitingReview),
-			len(dispatchPlan.Blocked.WaitingExternal), len(dispatchPlan.Blocked.WaitingVerification),
+			len(dispatchPlan.Blocked.WaitingExternal), len(dispatchPlan.Blocked.WaitingTodo),
+			len(dispatchPlan.Blocked.WaitingVerification),
 			len(dispatchPlan.Blocked.CircuitBroken), len(dispatchPlan.Blocked.OutOfScope)))
 	} else {
-		sb.WriteString(fmt.Sprintf("  Dispatch: %s (items=%d, deferred=%d, active=%d, waiting_external=%d)\n",
+		sb.WriteString(fmt.Sprintf("  Dispatch: %s (items=%d, deferred=%d, active=%d, waiting_external=%d, waiting_todo=%d)\n",
 			dispatchPlan.Status, len(dispatchPlan.Items), len(dispatchPlan.Deferred),
-			len(dispatchPlan.Active), len(dispatchPlan.Blocked.WaitingExternal)))
+			len(dispatchPlan.Active), len(dispatchPlan.Blocked.WaitingExternal),
+			len(dispatchPlan.Blocked.WaitingTodo)))
 	}
 	if len(events) > 0 {
 		sb.WriteString("  最近事件:\n")

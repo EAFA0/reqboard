@@ -324,15 +324,16 @@ func LayoutWith(dag *model.DAG, includeExternal bool) {
 		}
 	}
 
-	// Depth only follows main -> main dependencies; external upstreams must not
-	// add columns to the main canvas.
+	// Natural left-to-right topology depth: every main node sits one column
+	// right of its deepest blocking upstream. Chain length is preserved instead
+	// of pulling short sinks to the right edge.
 	depth := map[string]int{}
 	for _, id := range order {
 		if !mainSet[id] {
 			continue
 		}
 		for _, e := range dag.Edges {
-			if e.From != id || !mainSet[e.To] {
+			if e.From != id || !mainSet[e.To] || !model.BlockingEdge(e.Kind) {
 				continue
 			}
 			if depth[id]+1 > depth[e.To] {
@@ -340,7 +341,9 @@ func LayoutWith(dag *model.DAG, includeExternal bool) {
 			}
 		}
 	}
-	rightAlignDepths(dag, order, mainSet, nil, nil, depth)
+	// Only terminal business scenario nodes tagged milestone/e2e are pinned to
+	// the far-right final column.
+	pinMilestoneDepths(dag, mainSet, depth)
 	byDepth := map[int][]*model.Node{}
 	maxDepth := 0
 	for _, n := range main {
@@ -404,13 +407,13 @@ func LayoutWith(dag *model.DAG, includeExternal bool) {
 	}
 }
 
-// layoutFull lays out the complete graph. External / collaborator nodes are
-// forced into Column 0; mine nodes are layered after their blocking upstreams.
-// out_of_scope nodes stay in a compact shelf below the flow so they never add
-// phantom columns.
+// layoutFull lays out the complete graph. Prerequisite nodes (external /
+// collaborator / todo) are forced into Column 0; mine nodes are layered after
+// their blocking upstreams. out_of_scope nodes stay in a compact shelf below
+// the flow so they never add phantom columns.
 func layoutFull(dag *model.DAG, order []string) {
 	isSource := func(n *model.Node) bool {
-		return n.Scope == model.ScopeExternal || n.Scope == model.ScopeCollaborator
+		return model.IsPrerequisiteScope(n.Scope)
 	}
 	isRedline := func(n *model.Node) bool { return n.Scope == model.ScopeOutOfScope }
 
@@ -424,7 +427,6 @@ func layoutFull(dag *model.DAG, order []string) {
 		}
 		inFlow[n.ID] = true
 	}
-	pinned := map[string]bool{}
 	for _, id := range order {
 		n := dag.Node(id)
 		if n == nil || !inFlow[id] {
@@ -432,7 +434,6 @@ func layoutFull(dag *model.DAG, order []string) {
 		}
 		if isSource(n) {
 			depth[id] = 0
-			pinned[id] = true
 			continue
 		}
 		for _, e := range dag.InEdges(id) {
@@ -444,10 +445,6 @@ func layoutFull(dag *model.DAG, order []string) {
 			}
 		}
 	}
-	rightAlignDepths(dag, order, inFlow, pinned, func(e *model.Edge) bool {
-		return model.BlockingEdge(e.Kind)
-	}, depth)
-
 	byDepth := map[int][]*model.Node{}
 	maxDepth, maxCount := 0, 1
 	for _, n := range dag.Nodes {
@@ -570,86 +567,28 @@ func isMilestoneNode(n *model.Node) bool {
 	return false
 }
 
-// rightAlignDepths pulls connected terminal nodes (in > 0, out == 0) to the
-// rightmost feature column and pins terminal milestone/e2e nodes to the far
-// right, then propagates ALAP backwards so short chains converge naturally
-// on the right instead of crowding Column 0/1. Truly isolated nodes stay left.
-func rightAlignDepths(dag *model.DAG, order []string, active map[string]bool, pinned map[string]bool, edgeFilter func(*model.Edge) bool, depth map[string]int) {
-	inCount := map[string]int{}
-	outTargets := map[string][]string{}
-	for _, e := range dag.Edges {
-		if !active[e.From] || !active[e.To] {
-			continue
-		}
-		if edgeFilter != nil && !edgeFilter(e) {
-			continue
-		}
-		inCount[e.To]++
-		outTargets[e.From] = append(outTargets[e.From], e.To)
-	}
-	featureMax := 0
-	hasTerminalMilestone := false
-	hasNonMilestoneAtMax := false
+// pinMilestoneDepths pins terminal milestone/e2e scenario nodes to the
+// rightmost feature column. Ordinary nodes keep their natural topology depth.
+func pinMilestoneDepths(dag *model.DAG, active map[string]bool, depth map[string]int) {
+	maxFeature := -1
 	for id := range active {
-		if pinned != nil && pinned[id] {
+		if isMilestoneNode(dag.Node(id)) {
 			continue
 		}
-		if len(outTargets[id]) == 0 && isMilestoneNode(dag.Node(id)) {
-			hasTerminalMilestone = true
-			continue
+		if depth[id] > maxFeature {
+			maxFeature = depth[id]
 		}
-		if depth[id] > featureMax {
-			featureMax = depth[id]
-		}
+	}
+	if maxFeature < 0 {
+		return
 	}
 	for id := range active {
-		if pinned != nil && pinned[id] {
+		n := dag.Node(id)
+		if !isMilestoneNode(n) || dag.Outdegree(id) > 0 {
 			continue
 		}
-		if !(len(outTargets[id]) == 0 && isMilestoneNode(dag.Node(id))) && depth[id] == featureMax && (inCount[id] > 0 || len(outTargets[id]) > 0) {
-			hasNonMilestoneAtMax = true
-			break
-		}
-	}
-	milestoneCol := featureMax
-	if hasTerminalMilestone && hasNonMilestoneAtMax {
-		milestoneCol = featureMax + 1
-	}
-	for id := range active {
-		if pinned != nil && pinned[id] {
-			continue
-		}
-		if len(outTargets[id]) == 0 && isMilestoneNode(dag.Node(id)) && depth[id] > milestoneCol {
-			milestoneCol = depth[id]
-		}
-	}
-
-	for i := len(order) - 1; i >= 0; i-- {
-		id := order[i]
-		if !active[id] || (pinned != nil && pinned[id]) {
-			continue
-		}
-		outs := outTargets[id]
-		if len(outs) == 0 {
-			if isMilestoneNode(dag.Node(id)) {
-				if milestoneCol > depth[id] {
-					depth[id] = milestoneCol
-				}
-			} else if inCount[id] > 0 {
-				if featureMax > depth[id] {
-					depth[id] = featureMax
-				}
-			}
-			continue
-		}
-		minChild := -1
-		for _, to := range outs {
-			if minChild < 0 || depth[to] < minChild {
-				minChild = depth[to]
-			}
-		}
-		if minChild-1 > depth[id] {
-			depth[id] = minChild - 1
+		if target := maxFeature + 1; depth[id] < target {
+			depth[id] = target
 		}
 	}
 }

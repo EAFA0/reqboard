@@ -47,6 +47,13 @@ cp "$ROOT/fixtures/bindings.json" "$ROOT/.reqboard/bindings.json"
 "$RB" node update rb-vis --root "$ROOT" --hold false --actor human >/dev/null
 "$RB" node review rb-precheck --root "$ROOT" --pass --actor human >/dev/null
 
+# One first-class TODO blocking two downstream nodes: demonstrates 1→N gating
+# and one-click Done unlocking.
+"$RB" todo add "DDL: orders add confirmation_mode" --root "$ROOT" --kind ddl \
+  --blocks rb-vis,rb-query --note "上线前执行；阻塞可见性/查询两条链路完结" --actor human >/dev/null
+"$RB" layout --root "$ROOT" >/dev/null
+
 echo "[demo] sandbox ready: $ROOT"
 echo "  cd $ROOT && $RB status"
+echo "  $RB todo list"
 echo "  open VS Code on $ROOT and run: ReqBoard: Open Board"

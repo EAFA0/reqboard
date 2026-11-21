@@ -279,3 +279,61 @@ func TestMineDependencyDoesNotBlockStart(t *testing.T) {
 		t.Fatalf("mine -> mine must not block start: items=%+v", p.Items)
 	}
 }
+
+func TestTodoDoesNotBlockStartByDefault(t *testing.T) {
+	d := model.NewDAG("req")
+	testutil.AddNode(d, "rb-todo", "DDL: orders add confirmation_mode", model.ScopeTodo, model.StatusPending)
+	testutil.AddNode(d, "rb-mine", "下单", model.ScopeMine, model.StatusPending)
+	testutil.AddEdge(d, "ed-1", "rb-todo", "rb-mine", model.EdgeHard, "")
+
+	p := Compute(d, model.NewBindings(), &audit.Report{}, Options{MaxParallel: 4})
+	found := false
+	for _, it := range p.Items {
+		if it.NodeID == "rb-mine" && it.Kind == "implement" {
+			found = true
+		}
+		if it.NodeID == "rb-todo" {
+			t.Fatalf("todo node must not enter the P1 coding queue: %+v", p.Items)
+		}
+	}
+	if !found {
+		t.Fatalf("todo --hard--> mine must not block P1 start by default: %+v", p.Items)
+	}
+	if len(p.Blocked.WaitingTodo) != 1 || p.Blocked.WaitingTodo[0].NodeID != "rb-todo" {
+		t.Fatalf("todo node should be listed in waiting_todo: %+v", p.Blocked.WaitingTodo)
+	}
+}
+
+func TestTodoBlockStartTagBlocksP1(t *testing.T) {
+	d := model.NewDAG("req")
+	todo := testutil.AddNode(d, "rb-todo", "DDL: orders add confirmation_mode", model.ScopeTodo, model.StatusPending)
+	todo.Tags = []string{"ddl", "block-start"}
+	testutil.AddNode(d, "rb-mine", "下单", model.ScopeMine, model.StatusPending)
+	testutil.AddEdge(d, "ed-1", "rb-todo", "rb-mine", model.EdgeHard, "")
+
+	p := Compute(d, model.NewBindings(), &audit.Report{}, Options{MaxParallel: 4})
+	for _, it := range p.Items {
+		if it.NodeID == "rb-mine" {
+			t.Fatalf("block-start todo must block P1: %+v", p.Items)
+		}
+	}
+	var blocked *Blocker
+	for i := range p.Blocked.WaitingTodo {
+		if p.Blocked.WaitingTodo[i].NodeID == "rb-mine" {
+			blocked = &p.Blocked.WaitingTodo[i]
+		}
+	}
+	if blocked == nil {
+		t.Fatalf("blocked mine node missing from waiting_todo: %+v", p.Blocked)
+	}
+	if !strings.Contains(blocked.Reason, "前置 TODO") || !strings.Contains(blocked.Reason, "block-start") {
+		t.Fatalf("todo block reason = %q", blocked.Reason)
+	}
+
+	// Marking the TODO done releases the P1 start gate.
+	todo.Status = model.StatusDone
+	p = Compute(d, model.NewBindings(), &audit.Report{}, Options{MaxParallel: 4})
+	if len(p.Items) != 1 || p.Items[0].NodeID != "rb-mine" {
+		t.Fatalf("done todo should unlock P1: %+v", p.Items)
+	}
+}

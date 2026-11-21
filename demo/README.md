@@ -7,8 +7,10 @@
 cd demo
 reqboard status
 reqboard check --all
+reqboard todo list
 reqboard dispatch --max-parallel 6
 reqboard done rb-precheck      # 观察 4 道完结门禁拦截
+reqboard done <todo-id>        # 前置 TODO 直接 Done，解锁 rb-vis / rb-query
 ```
 
 然后用 VS Code 打开 `demo/`，执行 **ReqBoard: Open Board**。
@@ -17,7 +19,8 @@ reqboard done rb-precheck      # 观察 4 道完结门禁拦截
 
 | 场景 | 位置 |
 | :--- | :--- |
-| 左细右粗多层级 DAG（12 节点 / 10 边） | `.reqboard/dag.json` |
+| 自然拓扑多层级 DAG | `.reqboard/dag.json`（`reqboard layout` 重新计算） |
+| 一等前置 TODO（1→2 阻塞） | `DDL: orders add confirmation_mode` → `rb-vis` / `rb-query` |
 | `out_of_scope` 红线 | `rb-refund`（退订/退款） |
 | `proposed` 待批节点 | `rb-invoice`（发票抬头校验） |
 | 橙色虚线 `mocked` 边 + 备注 | `rb-auth -> rb-precheck`：“因 AuthService 接口方案未确认，这条链路先 mock” |

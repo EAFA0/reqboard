@@ -84,6 +84,7 @@ func runDispatch(a *Args, rest []string) *Error {
 			writeBlocked(&sb, "waiting_approval（待审批）", plan.Blocked.WaitingApproval)
 			writeBlocked(&sb, "waiting_review（待人工 Review / 修复）", plan.Blocked.WaitingReview)
 			writeBlocked(&sb, "waiting_external（外部/协作者/Mock 阻塞）", plan.Blocked.WaitingExternal)
+			writeBlocked(&sb, "waiting_todo（DDL / 网关配置 / Feature Flag 前置）", plan.Blocked.WaitingTodo)
 			writeBlocked(&sb, "waiting_verification（端到端/验收/范围节点）", plan.Blocked.WaitingVerification)
 			writeBlocked(&sb, "circuit_broken（熔断需人工拍板）", plan.Blocked.CircuitBroken)
 			writeBlocked(&sb, "out_of_scope（PRD 红线，本期不做）", plan.Blocked.OutOfScope)

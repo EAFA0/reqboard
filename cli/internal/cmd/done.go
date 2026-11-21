@@ -39,13 +39,14 @@ func runDone(a *Args, rest []string) *Error {
 		if n.Status == model.StatusDeprecated {
 			return &Error{Code: 1, Msg: "cannot complete a deprecated node", Text: "[REQBOARD BLOCKED] 节点已 deprecated，不能标 done；请走 To-Delete 残骸清理流程。\n"}
 		}
+		prereq := model.IsPrerequisiteScope(n.Scope)
 		external := isExternalScope(n.Scope)
 		unmock := a.Bool("unmock-downstream")
-		if unmock && !external {
-			return fail("--unmock-downstream 仅适用于 external/collaborator 节点")
+		if unmock && !prereq {
+			return fail("--unmock-downstream 仅适用于 external/collaborator/todo 节点")
 		}
 		if n.Status == model.StatusDone {
-			if !external || !unmock {
+			if !prereq || !unmock {
 				return fail("node %s is already done", id)
 			}
 			// Late unmock: the dependency was already marked done but the
@@ -71,7 +72,7 @@ func runDone(a *Args, rest []string) *Error {
 			return nil
 		}
 		evidence := a.Strs("evidence")
-		if !external {
+		if !prereq {
 			bindings, berr := ctx.Store.LoadBindings()
 			if berr != nil {
 				return fail("%v", berr)
@@ -96,7 +97,7 @@ func runDone(a *Args, rest []string) *Error {
 		n.StaleReason = ""
 		n.UpdatedAt = model.Now()
 		var switched, stale []string
-		if external && unmock {
+		if prereq && unmock {
 			switched, stale = applyUnmockDownstream(dag, n, ctx.Actor)
 		}
 		if err := ctx.SaveDAG(dag, "done", id, strings.Join(evidence, "; ")); err != nil {
@@ -121,8 +122,12 @@ func runDone(a *Args, rest []string) *Error {
 		}
 		var sb strings.Builder
 		sb.WriteString(fmt.Sprintf("[REQBOARD DONE] %s  %s  ✔\n", id, n.Title))
-		if external {
-			sb.WriteString(fmt.Sprintf("  scope=%s：外部/协作者节点无我方代码门禁，直接标记 done。\n", n.Scope))
+		if prereq {
+			if n.Scope == model.ScopeTodo {
+				sb.WriteString("  scope=todo：前置 TODO 节点无我方代码门禁，直接标记 done。\n")
+			} else {
+				sb.WriteString(fmt.Sprintf("  scope=%s：外部/协作者节点无我方代码门禁，直接标记 done。\n", n.Scope))
+			}
 			if unmock {
 				writeUnmockResult(&sb, switched, stale)
 			} else {
@@ -142,6 +147,7 @@ func runDone(a *Args, rest []string) *Error {
 		sb.WriteString("  下一步: `reqboard dispatch` 继续推进；全部完成后会返回 QUIESCENT。\n")
 		ctx.Emit(sb.String(), map[string]interface{}{
 			"ok": true, "node_id": id, "status": n.Status, "external": external,
+			"todo": n.Scope == model.ScopeTodo, "prerequisite": prereq,
 			"forced": force, "evidence": n.Evidence, "unlocked": unlocked,
 			"mocked_edges": mocked, "unmocked_edges": switched, "stale_nodes": stale,
 		})
