@@ -140,14 +140,12 @@ func isDefaultMockGlob(glob string) bool {
 }
 
 // shouldIgnore reports whether a changed file is filtered out of the audit.
-// Default noise filters (tests, generated mocks) yield to an explicit binding:
-// a hand-written mock_provider.go bound as mock/impl must stay visible so it can
-// be tracked and later dismantled. User ignore globs and the include allow-list
-// still apply.
+// exclude_tests applies globally (even to previously bound test files) so unit
+// tests never pollute diff stats or review lists unless opted back in. Hand-
+// written mocks explicitly bound as mock/impl still win over default mock globs.
 func shouldIgnore(cfg *model.Config, bindings *model.Bindings, repo, path string) bool {
-	boundAny := explicitlyBound(bindings, repo, path)
 	boundMockOrImpl := explicitlyBound(bindings, repo, path, model.RoleMock, model.RoleImpl)
-	if cfg.ShouldExcludeTests() && pathmatch.MatchAny(model.DefaultTestGlobs, path) && !boundAny {
+	if cfg.ShouldExcludeTests() && pathmatch.MatchAny(model.DefaultTestGlobs, path) {
 		return true
 	}
 	for _, glob := range cfg.IgnoreGlobs {
@@ -163,6 +161,17 @@ func shouldIgnore(cfg *model.Config, bindings *model.Bindings, repo, path string
 		return true
 	}
 	return false
+}
+
+// shouldIgnoreBinding reports whether a stored binding is hidden by the active
+// filter (so toggling exclude_tests or include/exclude never triggers false
+// Broken Binding violations).
+func shouldIgnoreBinding(cfg *model.Config, bindings *model.Bindings, b model.Binding) bool {
+	p := filepath.ToSlash(b.File)
+	if cfg.ShouldExcludeTests() && (b.Role == model.RoleTest || pathmatch.MatchAny(model.DefaultTestGlobs, p)) {
+		return true
+	}
+	return shouldIgnore(cfg, bindings, b.Repo, p)
 }
 
 // matchInclude matches path-style globs and repo-qualified `repo:glob` entries.
@@ -288,9 +297,13 @@ func Run(cfg *model.Config, root string, dag *model.DAG, bindings *model.Binding
 		}
 	}
 
-	// Broken bindings are always evaluated against the current tree.
+	// Broken bindings are evaluated against the current tree, skipping bindings
+	// hidden by the active diff filter (e.g. exclude_tests=true).
 	for _, b := range bindings.Bindings {
 		if opts.NodeID != "" && b.NodeID != opts.NodeID {
+			continue
+		}
+		if shouldIgnoreBinding(cfg, bindings, b) {
 			continue
 		}
 		if bb := checkBinding(cfg, root, b, dag); bb != nil {

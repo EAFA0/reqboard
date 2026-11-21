@@ -212,7 +212,8 @@ func TestAuditExplicitBindExemptsDefaultNoiseFilters(t *testing.T) {
 		Granularity: model.GranularitySymbol, Symbol: "NewMockProvider",
 		Role: model.RoleMock, Why: "手写业务 mock", BoundAt: model.Now(),
 	})
-	// Explicitly bound test file: the bind wins over exclude_tests.
+	// Explicitly bound test file: exclude_tests applies globally so tests stay
+	// hidden from attributed stats without reporting false Broken Bindings.
 	testutil.Write(t, filepath.Join(repoPath, "pkg/order_test.go"),
 		"package svc\n\nimport \"testing\"\n\nfunc TestCreateOrder(t *testing.T) {}\n")
 	bindings.Bindings = append(bindings.Bindings, model.Binding{
@@ -224,12 +225,21 @@ func TestAuditExplicitBindExemptsDefaultNoiseFilters(t *testing.T) {
 		"package svc\n\nfunc OtherMock() string {\n\treturn \"noise\"\n}\n")
 
 	rep := Run(cfg, root, dag, bindings, Options{All: true})
+	foundTestIgnored := false
 	for _, f := range rep.Ignored {
 		if f == "api:svc/mock_provider.go" {
 			t.Fatalf("explicit mock binding was swallowed by default ignore globs: %+v", rep.Ignored)
 		}
 		if f == "api:pkg/order_test.go" {
-			t.Fatalf("explicit test binding was swallowed by exclude_tests: %+v", rep.Ignored)
+			foundTestIgnored = true
+		}
+	}
+	if !foundTestIgnored {
+		t.Fatalf("bound test file should still be excluded when exclude_tests=true: %+v", rep.Ignored)
+	}
+	for _, bb := range rep.Broken {
+		if bb.File == "pkg/order_test.go" {
+			t.Fatalf("filtered test binding must not report as broken: %+v", bb)
 		}
 	}
 	foundMock := false

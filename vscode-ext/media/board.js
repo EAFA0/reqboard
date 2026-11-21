@@ -1471,7 +1471,17 @@
       body.innerHTML = html;
       return;
     }
-    const bindings = (snap.bindings || []).filter((b) => b.node_id === selected.id && matchesDiffSearch(b));
+    const excludeTests = !state.snap.diff || !state.snap.diff.filter || state.snap.diff.filter.exclude_tests !== false;
+    const isTestBinding = (b) => b.role === 'test' || /(?:_test\.go|\.test\.[jt]sx?|\.spec\.[jt]sx?|(?:^|\/)test_[^/]+\.py|_test\.py)$/i.test(String(b.file || ''));
+    const allNodeBindings = (snap.bindings || []).filter((b) => b.node_id === selected.id);
+    let hiddenTests = 0;
+    const bindings = allNodeBindings.filter((b) => {
+      if (excludeTests && isTestBinding(b)) {
+        hiddenTests++;
+        return false;
+      }
+      return matchesDiffSearch(b);
+    });
     const notes = selected.review_notes || [];
     const mocks = selected.self_mocks || [];
     html += `<div class="section-title">功能点</div>
@@ -1480,7 +1490,8 @@
     if (selected.description) {
       html += `<div class="why">${esc(selected.description)}</div>`;
     }
-    html += `<div class="section-title">挂载符号 (${bindings.length})</div>`;
+    const hiddenHint = hiddenTests ? `，已隐藏 ${hiddenTests} 个单测` : '';
+    html += `<div class="section-title">挂载符号 (${bindings.length}${hiddenHint})</div>`;
     if (!bindings.length) {
       html += '<div class="empty">尚未 bind；本节点范围内的改动会进 Orphan Diff。</div>';
     }

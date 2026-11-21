@@ -42,8 +42,8 @@ description: 多仓复杂需求的本地控制面：PRD 锚点、功能级 DAG�
 `claim → 读注入 → 改码/单测 → bind → check --node → 回报`
 1. `reqboard claim <id> --session <sid> --lease <repo:glob>`
    - 拒绝 `out_of_scope`/`external`/`proposed`/`hold`；注入 PRD 原文、红线、mocked 备注、批注与人工调整。
-2. 只改锚定 PRD 覆盖的行为；每处改动必须：
-   `reqboard bind <id> --repo <r> --file <f> --symbol <s> --role impl|mock|test --why "..."`
+2. 只改锚定 PRD 覆盖的行为；每处生产改动必须挂载（**默认全局排除单测，只需 `bind` 生产 `impl` 与手写 `mock`，无需绑定 `*_test.go`**）：
+   `reqboard bind <id> --repo <r> --file <f> --symbol <s> --role impl|mock --why "..."`
    - 大文件多符号一次挂载：`reqboard bind <id> --repo <r> --file <f> --all-symbols --why "..." [--keep-status]`。
    - 手写业务 mock（如 `mock_provider.go`）显式 `--role mock` 后不会被默认 `**/*_mock.go` / `**/mock_*.go` 吞掉。
 3. 自检：`reqboard check --node <id>` 必须无 Orphan/Broken/To-Delete。
