@@ -1453,17 +1453,20 @@ textarea:focus {
   word-break: break-all;
 }
 
-.diff-item .stat {
+.diff-item .stat,
+.binding .stat {
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 10px;
   margin-left: 4px;
 }
 
-.diff-item .stat .add {
+.diff-item .stat .add,
+.binding .stat .add {
   color: var(--rb-green);
 }
 
-.diff-item .stat .del {
+.diff-item .stat .del,
+.binding .stat .del {
   color: var(--rb-red);
 }
 

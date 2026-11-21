@@ -757,4 +757,32 @@ test('right pane lists, adds and removes node refs', () => {
   assert.strictEqual(remove.refId, 'rf-01');
 });
 
+test('selected node diff renders above global orphan alerts with attributed stats and resets scroll', () => {
+  const snap = diffSnapshot();
+  snap.bindings = [
+    { id: 'b-1', node_id: 'rb-a', repo: 'order_api', file: 'service/create.go', symbol: 'CreateOrder', role: 'impl', why: 'main entry' },
+  ];
+  snap.check.buckets.attributed = [
+    { repo: 'order_api', file: 'service/create.go', symbol: 'CreateOrder', start: 42, added: 18, deleted: 3, node_ids: ['rb-a'] },
+  ];
+  const { document, window } = boot(snap);
+  const diffBody = document.getElementById('diff-body');
+  diffBody.scrollTop = 260;
+
+  click(window, document.querySelector('.prd-block[data-anchor="p-main"]'));
+  assert.strictEqual(diffBody.scrollTop, 0, 'diff pane should scroll to top on node select');
+
+  const html = diffBody.innerHTML;
+  const bindingIdx = html.indexOf('本节点 Diff / 挂载符号 (1)');
+  const orphanIdx = html.indexOf('Orphan Diff (2)');
+  assert.ok(bindingIdx >= 0, 'node diff section missing');
+  assert.ok(orphanIdx > bindingIdx, 'selected node diff must render above global Orphan Diff');
+
+  const bindingEl = diffBody.querySelector('.binding');
+  assert.ok(bindingEl, 'binding card missing');
+  assert.strictEqual(bindingEl.dataset.line, '42');
+  assert.ok(bindingEl.textContent.includes('+18'), 'attributed +added missing');
+  assert.ok(bindingEl.textContent.includes('-3'), 'attributed -deleted missing');
+});
+
 console.log('all webview DOM tests passed');

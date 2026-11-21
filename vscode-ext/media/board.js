@@ -1050,6 +1050,10 @@
     }
     highlightPRD();
     renderRight();
+    const diffBody = $('diff-body');
+    if (diffBody) {
+      diffBody.scrollTop = 0;
+    }
     applyExternalHighlight();
     renderAnchorLinks();
     if (o.scrollPRD !== false && state.selectedAnchor) {
@@ -1621,14 +1625,14 @@
     const selected = findNode(state.selectedNode);
     $('sel-node-badge').textContent = selected ? selected.id : '';
 
-    let html = '';
-    html += bucketHTML('orphan', 'Orphan Diff', orphan, diffItemHTML);
-    html += bucketHTML('todelete', 'To-Delete 残骸', todelete, diffItemHTML);
-    html += bucketHTML('broken', 'Broken Binding', broken, brokenItemHTML);
+    const globalAlertsHTML =
+      bucketHTML('orphan', 'Orphan Diff', orphan, diffItemHTML) +
+      bucketHTML('todelete', 'To-Delete 残骸', todelete, diffItemHTML) +
+      bucketHTML('broken', 'Broken Binding', broken, brokenItemHTML);
 
     if (!selected) {
-      html += '<div class="empty">在左栏点段落或在 DAG 点节点，查看该功能点的 PRD 与多仓 Diff。</div>';
-      body.innerHTML = html;
+      body.innerHTML = globalAlertsHTML +
+        '<div class="empty">在左栏点段落或在 DAG 点节点，查看该功能点的 PRD 与多仓 Diff。</div>';
       return;
     }
     const excludeTests = !state.snap.diff || !state.snap.diff.filter || state.snap.diff.filter.exclude_tests !== false;
@@ -1642,23 +1646,34 @@
       }
       return matchesDiffSearch(b);
     });
+    const attrByKey = Object.create(null);
+    for (const e of (buckets.attributed || [])) {
+      const k = `${e.repo || ''}:${e.file || ''}::${e.symbol || ''}`;
+      if (!attrByKey[k]) {
+        attrByKey[k] = e;
+      }
+    }
     const notes = selected.review_notes || [];
     const mocks = selected.self_mocks || [];
-    html += `<div class="section-title">功能点</div>
+    let html = `<div class="section-title" style="margin-top:2px">功能点</div>
       <div><b>${esc(selected.title)}</b> <span class="badge">${esc(selected.id)}</span></div>
       <div class="prd-refs">${(selected.prd_refs || []).map((r) => `<span class="prd-ref" data-prd-ref="${esc(r)}">@${esc(r)}</span>`).join('') || '<span class="muted">无 PRD 锚点</span>'}</div>`;
     if (selected.description) {
       html += `<div class="why">${esc(selected.description)}</div>`;
     }
-    html += refsSectionHTML(selected);
     const hiddenHint = hiddenTests ? `，已隐藏 ${hiddenTests} 个单测` : '';
-    html += `<div class="section-title">挂载符号 (${bindings.length}${hiddenHint})</div>`;
+    html += `<div class="section-title">本节点 Diff / 挂载符号 (${bindings.length}${hiddenHint})</div>`;
     if (!bindings.length) {
-      html += '<div class="empty">尚未 bind；本节点范围内的改动会进 Orphan Diff。</div>';
+      html += '<div class="empty">尚未 bind；本节点范围内的改动会进下方全局 Orphan Diff。</div>';
     }
     for (const b of bindings) {
-      html += `<div class="binding" data-open-diff data-repo="${esc(b.repo)}" data-file="${esc(b.file)}" data-symbol="${esc(b.symbol)}" data-line="0">
-        <div class="loc">${esc(b.repo)}:${esc(b.file)} :: ${esc(b.symbol)}<span class="role-chip role-${esc(b.role)}">${esc(b.role)}</span></div>
+      const hit = attrByKey[`${b.repo || ''}:${b.file || ''}::${b.symbol || ''}`];
+      const stat = hit
+        ? `<span class="stat"><span class="add">+${hit.added || 0}</span> <span class="del">-${hit.deleted || 0}</span></span>`
+        : '';
+      const line = hit && hit.start ? hit.start : 0;
+      html += `<div class="binding" data-open-diff data-repo="${esc(b.repo)}" data-file="${esc(b.file)}" data-symbol="${esc(b.symbol)}" data-line="${line}">
+        <div class="loc">${esc(b.repo)}:${esc(b.file)} :: ${esc(b.symbol)}${stat}<span class="role-chip role-${esc(b.role)}">${esc(b.role)}</span></div>
         <div class="why">${esc(b.why || '')}</div>
       </div>`;
     }
@@ -1674,6 +1689,7 @@
         html += `<div class="review-note ${r.status === 'resolved' ? 'resolved' : ''}">${esc(r.id)} · ${esc(r.status)}：${esc(r.comment)}</div>`;
       }
     }
+    html += refsSectionHTML(selected);
     html += opsSectionHTML(selected);
     html += `<div class="review-actions">
       <button class="primary" data-review-pass="${esc(selected.id)}">Reviewed 通过</button>
@@ -1684,7 +1700,9 @@
     <div class="reject-box" id="reject-box">
       <textarea id="reject-note" placeholder="写明具体批注，Agent 下一轮会按批注修复"></textarea>
       <button class="primary" data-review-submit="${esc(selected.id)}">提交打回</button>
-    </div>`;
+    </div>
+    <div class="section-title">全局 Diff 告警（全仓）</div>
+    ${globalAlertsHTML}`;
     body.innerHTML = html;
   }
 
