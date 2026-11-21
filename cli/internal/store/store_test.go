@@ -50,11 +50,15 @@ func TestAtomicWriteAndEvents(t *testing.T) {
 	if err != nil || got.Revision != 7 {
 		t.Fatalf("dag = %+v err=%v", got, err)
 	}
-	// No temp files left behind.
+	// No temp files left behind (runtime dotfiles .lock / .gitignore / .undo are expected).
 	entries, _ := os.ReadDir(s.Dir())
 	for _, e := range entries {
-		if filepath.Ext(e.Name()) == ".tmp" || (len(e.Name()) > 0 && e.Name()[0] == '.' && e.Name() != ".lock") {
-			t.Fatalf("temp file leaked: %s", e.Name())
+		name := e.Name()
+		if filepath.Ext(name) == ".tmp" {
+			t.Fatalf("temp file leaked: %s", name)
+		}
+		if len(name) > 0 && name[0] == '.' && name != ".lock" && name != ".gitignore" && name != ".undo" {
+			t.Fatalf("temp file leaked: %s", name)
 		}
 	}
 	for i := 0; i < 5; i++ {

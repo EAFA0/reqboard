@@ -9,6 +9,8 @@
 - **外部依赖聚合降噪**：主画布默认只画我方主干，`external` / `collaborator` 收进 External Dock，`out_of_scope` 收进红线胶囊；外部就绪可一键 `--unmock-downstream`。
 - **CLI 即规则注入**：`claim` 实时注入 PRD 原文、红线、mocked 备注、Review 批注与人工最新调整。
 - **人类直写零延迟**：VS Code 三栏看板直接读写 `.reqboard/`，`fs.watch` 热刷新。
+- **误操作可回滚**：`reqboard undo` / `redo` 最多 20 步快照；看板 `Ctrl+Z` / `Cmd+Z` 一键还原，`node delete` 有绑定保护。
+- **节点级 Ops 清单**：DDL / 网关配置 / Feature Flag 挂在节点 `ops` 上，不污染 DAG 节点数；顶栏胶囊汇总未完成项。
 
 ## 30 秒上手
 
@@ -18,7 +20,7 @@ cd cli && go build -o ../bin/reqboard . && cd ..
 ln -sf "$PWD/bin/reqboard" ~/.local/bin/reqboard
 
 # 2. 安装 VS Code 扩展
-code --install-extension vscode-ext/reqboard-vscode-0.1.3.vsix
+code --install-extension vscode-ext/reqboard-vscode-0.2.0.vsix
 
 # 3. 在下一个需求 worktree 初始化
 cd <requirement-worktree>

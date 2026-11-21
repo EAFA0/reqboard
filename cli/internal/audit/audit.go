@@ -103,14 +103,60 @@ func EffectiveFilter(cfg *model.Config) Filter {
 	return f
 }
 
+// defaultMockGlobs are the generated-mock patterns that used to swallow
+// hand-written mocks. An explicit binding (role mock/impl) wins over them.
+var defaultMockGlobs = []string{"**/*_mock.go", "**/mock_*.go"}
+
+// explicitlyBound reports whether the exact repo file was explicitly bound,
+// optionally restricted to the given roles.
+func explicitlyBound(bindings *model.Bindings, repo, path string, roles ...string) bool {
+	if bindings == nil {
+		return false
+	}
+	for _, b := range bindings.Bindings {
+		if b.Repo != repo || filepath.ToSlash(b.File) != path {
+			continue
+		}
+		if len(roles) == 0 {
+			return true
+		}
+		for _, role := range roles {
+			if b.Role == role {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isDefaultMockGlob(glob string) bool {
+	glob = strings.TrimSpace(glob)
+	for _, g := range defaultMockGlobs {
+		if glob == g {
+			return true
+		}
+	}
+	return false
+}
+
 // shouldIgnore reports whether a changed file is filtered out of the audit.
-// Tests are excluded by default, then user ignore globs, then an optional
-// include allow-list (path or repo:path).
-func shouldIgnore(cfg *model.Config, repo, path string) bool {
-	if cfg.ShouldExcludeTests() && pathmatch.MatchAny(model.DefaultTestGlobs, path) {
+// Default noise filters (tests, generated mocks) yield to an explicit binding:
+// a hand-written mock_provider.go bound as mock/impl must stay visible so it can
+// be tracked and later dismantled. User ignore globs and the include allow-list
+// still apply.
+func shouldIgnore(cfg *model.Config, bindings *model.Bindings, repo, path string) bool {
+	boundAny := explicitlyBound(bindings, repo, path)
+	boundMockOrImpl := explicitlyBound(bindings, repo, path, model.RoleMock, model.RoleImpl)
+	if cfg.ShouldExcludeTests() && pathmatch.MatchAny(model.DefaultTestGlobs, path) && !boundAny {
 		return true
 	}
-	if pathmatch.MatchAny(cfg.IgnoreGlobs, path) {
+	for _, glob := range cfg.IgnoreGlobs {
+		if !pathmatch.Match(glob, path) {
+			continue
+		}
+		if isDefaultMockGlob(glob) && boundMockOrImpl {
+			continue
+		}
 		return true
 	}
 	if len(cfg.IncludeGlobs) > 0 && !matchInclude(cfg.IncludeGlobs, repo, path) {
@@ -188,6 +234,10 @@ func Run(cfg *model.Config, root string, dag *model.DAG, bindings *model.Binding
 			base = "HEAD"
 			info.BaseRef = base
 		}
+		// Three-dot diff: compare against the common ancestor so a base branch
+		// that advanced ahead of the feature branch never shows up as reverse
+		// deletions.
+		base = gitx.ResolveBase(repoPath, base)
 		files, err := gitx.Collect(repoPath, base)
 		if err != nil {
 			info.Error = err.Error()
@@ -196,7 +246,7 @@ func Run(cfg *model.Config, root string, dag *model.DAG, bindings *model.Binding
 		}
 		for _, fd := range files {
 			p := filepath.ToSlash(fd.Path)
-			if shouldIgnore(cfg, repo.Name, p) {
+			if shouldIgnore(cfg, bindings, repo.Name, p) {
 				rep.Ignored = append(rep.Ignored, repo.Name+":"+p)
 				continue
 			}

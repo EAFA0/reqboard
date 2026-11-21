@@ -177,15 +177,10 @@ func TestAuditDeletedFileBrokenBinding(t *testing.T) {
 	}
 }
 
-func TestAuditExcludesTestsByDefault(t *testing.T) {
+func TestAuditExcludesUnboundTestsByDefault(t *testing.T) {
 	cfg, root, dag, bindings, repoPath := setup(t)
-	// A changed test file must be ignored even when it is explicitly bound.
 	testutil.Write(t, filepath.Join(repoPath, "pkg/order_test.go"),
 		"package svc\n\nimport \"testing\"\n\nfunc TestCreateOrder(t *testing.T) {}\n")
-	bindings.Bindings = append(bindings.Bindings, model.Binding{
-		ID: "bd-test", NodeID: "rb-a", Repo: "api", File: "pkg/order_test.go",
-		Granularity: model.GranularityFile, Role: model.RoleTest, Why: "unit test", BoundAt: model.Now(),
-	})
 
 	rep := Run(cfg, root, dag, bindings, Options{All: true})
 	if !rep.Filter.ExcludeTests {
@@ -204,6 +199,56 @@ func TestAuditExcludesTestsByDefault(t *testing.T) {
 		if e.File == "pkg/order_test.go" {
 			t.Fatalf("test file leaked into orphan diff: %+v", e)
 		}
+	}
+}
+
+func TestAuditExplicitBindExemptsDefaultNoiseFilters(t *testing.T) {
+	cfg, root, dag, bindings, repoPath := setup(t)
+	// Explicitly bound hand-written mock: must survive the default mock globs.
+	testutil.Write(t, filepath.Join(repoPath, "svc/mock_provider.go"),
+		"package svc\n\nfunc NewMockProvider() string {\n\treturn \"real-mock\"\n}\n")
+	bindings.Bindings = append(bindings.Bindings, model.Binding{
+		ID: "bd-mock", NodeID: "rb-a", Repo: "api", File: "svc/mock_provider.go",
+		Granularity: model.GranularitySymbol, Symbol: "NewMockProvider",
+		Role: model.RoleMock, Why: "手写业务 mock", BoundAt: model.Now(),
+	})
+	// Explicitly bound test file: the bind wins over exclude_tests.
+	testutil.Write(t, filepath.Join(repoPath, "pkg/order_test.go"),
+		"package svc\n\nimport \"testing\"\n\nfunc TestCreateOrder(t *testing.T) {}\n")
+	bindings.Bindings = append(bindings.Bindings, model.Binding{
+		ID: "bd-test", NodeID: "rb-a", Repo: "api", File: "pkg/order_test.go",
+		Granularity: model.GranularityFile, Role: model.RoleTest, Why: "unit test", BoundAt: model.Now(),
+	})
+	// Unbound mock still follows the default ignore globs.
+	testutil.Write(t, filepath.Join(repoPath, "svc/mock_other.go"),
+		"package svc\n\nfunc OtherMock() string {\n\treturn \"noise\"\n}\n")
+
+	rep := Run(cfg, root, dag, bindings, Options{All: true})
+	for _, f := range rep.Ignored {
+		if f == "api:svc/mock_provider.go" {
+			t.Fatalf("explicit mock binding was swallowed by default ignore globs: %+v", rep.Ignored)
+		}
+		if f == "api:pkg/order_test.go" {
+			t.Fatalf("explicit test binding was swallowed by exclude_tests: %+v", rep.Ignored)
+		}
+	}
+	foundMock := false
+	for _, e := range rep.Attributed {
+		if e.File == "svc/mock_provider.go" && e.Symbol == "NewMockProvider" {
+			foundMock = true
+		}
+	}
+	if !foundMock {
+		t.Fatalf("explicitly bound mock not attributed: %+v", rep.Attributed)
+	}
+	foundNoise := false
+	for _, f := range rep.Ignored {
+		if f == "api:svc/mock_other.go" {
+			foundNoise = true
+		}
+	}
+	if !foundNoise {
+		t.Fatalf("unbound mock_other.go should stay ignored: %+v", rep.Ignored)
 	}
 }
 

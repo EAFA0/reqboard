@@ -24,6 +24,7 @@
     anchorLinkedNodes: [],
     anchorBarClosed: false,
     diffSearch: '',
+    opsOpen: false,
   };
   let justDragged = false;
   let toastTimer = null;
@@ -69,6 +70,212 @@
 
   function isMainNode(n) {
     return !!n && (n.scope === 'mine' || n.status === 'proposed');
+  }
+
+  function kindLabel(kind) {
+    return ({
+      ddl: 'DDL',
+      gateway: 'Gateway',
+      flag: 'Flag',
+      other: 'Other',
+    })[kind] || kind || 'Other';
+  }
+
+  function nodeOps(n) {
+    return (n && Array.isArray(n.ops)) ? n.ops : [];
+  }
+
+  function opsEntries() {
+    const out = [];
+    for (const n of allNodes()) {
+      for (const op of nodeOps(n)) {
+        out.push({ node: n, op });
+      }
+    }
+    return out;
+  }
+
+  function opsStats() {
+    const entries = opsEntries();
+    return { total: entries.length, done: entries.filter((e) => e.op.done).length };
+  }
+
+  function bindingsFor(id) {
+    return (state.snap && state.snap.bindings ? state.snap.bindings : []).filter((b) => b.node_id === id);
+  }
+
+  function selectValue(el, fallback) {
+    if (!el) {
+      return fallback;
+    }
+    if (typeof el.value === 'string' && el.value) {
+      return el.value;
+    }
+    const idx = typeof el.selectedIndex === 'number' ? el.selectedIndex : -1;
+    if (idx >= 0 && el.options && el.options[idx]) {
+      return String(el.options[idx].value || el.options[idx].textContent || fallback);
+    }
+    return fallback;
+  }
+
+  function isTypingTarget(el) {
+    if (!el) {
+      return false;
+    }
+    const tag = String(el.tagName || '').toLowerCase();
+    return tag === 'input' || tag === 'textarea' || tag === 'select' || !!el.isContentEditable;
+  }
+
+  function blockingIndegree(dag, id) {
+    const edges = (dag && dag.edges) || [];
+    return edges.filter((e) => e.to === id && (e.kind === 'hard' || e.kind === 'mocked' || e.kind === 'stale')).length;
+  }
+
+  // Mirror the CLI layout so the canvas updates instantly; the CLI persists the
+  // same coordinates and a later snapshot confirms them.
+  function layoutLocal(includeExternal) {
+    const nodes = allNodes();
+    if (!nodes.length) {
+      return;
+    }
+    const dag = state.snap.dag || {};
+    const byId = {};
+    for (const n of nodes) {
+      byId[n.id] = n;
+    }
+    const NODE_GAP_X = 320;
+    const NODE_GAP_Y = 180;
+    const isSource = (n) => !!n && (n.scope === 'external' || n.scope === 'collaborator');
+    const isRedline = (n) => !!n && n.scope === 'out_of_scope';
+    const isMain = (n) => !!n && (n.scope === 'mine' || n.status === 'proposed');
+
+    const parkRedlines = (redlines, topY) => {
+      redlines.sort((a, b) => String(a.title).localeCompare(String(b.title)));
+      const cols = 8;
+      for (let i = 0; i < redlines.length; i++) {
+        redlines[i].position = {
+          x: 80 + (i % cols) * 280,
+          y: topY + Math.floor(i / cols) * 150,
+        };
+      }
+      return redlines.length ? Math.ceil(redlines.length / cols) * 150 : 0;
+    };
+
+    if (!includeExternal) {
+      const main = nodes.filter(isMain);
+      const mainSet = new Set(main.map((n) => n.id));
+      const depth = {};
+      for (let pass = 0; pass < nodes.length; pass++) {
+        for (const e of (dag.edges || [])) {
+          if (!mainSet.has(e.from) || !mainSet.has(e.to) || e.kind === 'discovered') {
+            continue;
+          }
+          const cand = (depth[e.from] || 0) + 1;
+          if (cand > (depth[e.to] || 0)) {
+            depth[e.to] = cand;
+          }
+        }
+      }
+      const parked = nodes.filter((n) => !mainSet.has(n.id));
+      parked.sort((a, b) => {
+        if (a.scope !== b.scope) {
+          return String(a.scope).localeCompare(String(b.scope));
+        }
+        return String(a.title).localeCompare(String(b.title));
+      });
+      const cols = 8;
+      const rows = Math.ceil(parked.length / cols);
+      for (let i = 0; i < parked.length; i++) {
+        parked[i].position = { x: 80 + (i % cols) * 280, y: 60 + Math.floor(i / cols) * 150 };
+      }
+      const mainTop = rows ? 60 + rows * 150 + 80 : 60;
+      const groups = {};
+      let maxCount = 1;
+      for (const n of main) {
+        const d = depth[n.id] || 0;
+        (groups[d] = groups[d] || []).push(n);
+        maxCount = Math.max(maxCount, groups[d].length);
+      }
+      for (const key of Object.keys(groups)) {
+        const d = Number(key);
+        const group = groups[key];
+        group.sort((a, b) => {
+          const ia = blockingIndegree(dag, a.id);
+          const ib = blockingIndegree(dag, b.id);
+          if (ia !== ib) {
+            return ia - ib;
+          }
+          return String(a.title).localeCompare(String(b.title));
+        });
+        const startY = mainTop + (maxCount - group.length) * 90;
+        group.forEach((n, i) => {
+          n.position = { x: 80 + d * NODE_GAP_X, y: startY + i * NODE_GAP_Y };
+        });
+      }
+      return;
+    }
+
+    // Full graph: external / collaborator sources sit in Column 0.
+    const flow = nodes.filter((n) => !isRedline(n));
+    const flowSet = new Set(flow.map((n) => n.id));
+    const depth = {};
+    for (let pass = 0; pass < nodes.length; pass++) {
+      for (const e of (dag.edges || [])) {
+        if (!flowSet.has(e.from) || !flowSet.has(e.to) || e.kind === 'discovered') {
+          continue;
+        }
+        const from = byId[e.from];
+        if (isSource(from)) {
+          if ((depth[e.to] || 0) < 1) {
+            depth[e.to] = 1;
+          }
+          continue;
+        }
+        const cand = (depth[e.from] || 0) + 1;
+        if (cand > (depth[e.to] || 0)) {
+          depth[e.to] = cand;
+        }
+      }
+    }
+    for (const n of flow) {
+      if (isSource(n)) {
+        depth[n.id] = 0;
+      } else if (!(n.id in depth)) {
+        depth[n.id] = 0;
+      }
+    }
+    const rank = (n) => isSource(n) ? 0 : (n.status === 'proposed' ? 1 : 2);
+    const groups = {};
+    let maxCount = 1;
+    for (const n of flow) {
+      const d = depth[n.id] || 0;
+      (groups[d] = groups[d] || []).push(n);
+      maxCount = Math.max(maxCount, groups[d].length);
+    }
+    let mainBottom = 0;
+    for (const key of Object.keys(groups)) {
+      const d = Number(key);
+      const group = groups[key];
+      group.sort((a, b) => {
+        const ra = rank(a);
+        const rb = rank(b);
+        if (ra !== rb) {
+          return ra - rb;
+        }
+        const ia = blockingIndegree(dag, a.id);
+        const ib = blockingIndegree(dag, b.id);
+        if (ia !== ib) {
+          return ia - ib;
+        }
+        return String(a.title).localeCompare(String(b.title));
+      });
+      const startY = 60 + (maxCount - group.length) * 90;
+      group.forEach((n, i) => {
+        n.position = { x: 80 + d * NODE_GAP_X, y: startY + i * NODE_GAP_Y };
+        mainBottom = Math.max(mainBottom, n.position.y + NODE_GAP_Y);
+      });
+    }
+    parkRedlines(nodes.filter(isRedline), mainBottom + 80);
   }
 
   function externalNodes() {
@@ -231,6 +438,24 @@
       stats += ` · ${dp.status} (${(dp.items || []).length} items)`;
     }
     $('top-stats').textContent = stats;
+    const undoBtn = $('btn-undo');
+    const redoBtn = $('btn-redo');
+    const undoDepth = Number(snap.undo_depth || 0);
+    const redoDepth = Number(snap.redo_depth || 0);
+    if (undoBtn) {
+      undoBtn.textContent = `↩ 撤销 (${undoDepth})`;
+      undoBtn.disabled = undoDepth <= 0;
+    }
+    if (redoBtn) {
+      redoBtn.textContent = `↪ 重做 (${redoDepth})`;
+      redoBtn.disabled = redoDepth <= 0;
+    }
+    const statsOps = opsStats();
+    const opsBtn = $('btn-ops');
+    if (opsBtn) {
+      opsBtn.textContent = `Ops 清单 (${statsOps.done}/${statsOps.total})`;
+      opsBtn.classList.toggle('active', state.opsOpen);
+    }
     const extBtn = $('btn-ext-canvas');
     if (extBtn) {
       extBtn.classList.toggle('active', state.showExternalCanvas);
@@ -565,6 +790,17 @@
     const proposed = n.status === 'proposed'
       ? `<div class="node-proposed-actions"><button data-approve="${esc(n.id)}">批准</button><button data-reject="${esc(n.id)}">驳回</button></div>`
       : '';
+    const ops = nodeOps(n);
+    let opsHTML = '';
+    if (ops.length) {
+      const chips = ops.slice(0, 4).map((op) => {
+        const label = kindLabel(op.kind);
+        const tip = `${op.done ? '已完成' : '未完成'} · ${op.title}${op.note ? ' · ' + op.note : ''}`;
+        return `<span class="op-chip ${op.done ? 'done' : 'pending'} kind-${esc(op.kind)}" title="${esc(tip)}">${op.done ? '✓' : ''}${esc(label)}</span>`;
+      }).join('');
+      const more = ops.length > 4 ? `<span class="op-chip more">+${ops.length - 4}</span>` : '';
+      opsHTML = `<div class="node-ops">${chips}${more}</div>`;
+    }
     return `<div class="${cls.join(' ')}" data-node="${esc(n.id)}" style="left:${p.x}px;top:${p.y}px">
       <div class="node-title" title="${esc(n.title)}">${esc(n.title)}</div>
       <div class="node-badges">${badges.join('')}</div>
@@ -573,6 +809,7 @@
         <span>${esc(scopeLabel(n.scope))}</span>
         <span><span class="diffstat"><span class="add">+${st.added || 0}</span> <span class="del">-${st.deleted || 0}</span></span> ${session}</span>
       </div>
+      ${opsHTML}
       ${proposed}
       <div class="node-port" data-port="${esc(n.id)}" title="拖拽到目标节点建边"></div>
     </div>`;
@@ -991,6 +1228,78 @@
     state.popup = div;
   }
 
+  /* ---------------- delete / ops ---------------- */
+
+  function requestDeleteNode(id) {
+    const n = findNode(id);
+    if (!n) {
+      return;
+    }
+    const owned = bindingsFor(id);
+    if (!owned.length) {
+      post({ type: 'node.delete', id });
+      showToast('节点已删除；Ctrl+Z / Cmd+Z 可一键还原', 'info');
+      return;
+    }
+    openDeleteConfirm(n, owned);
+  }
+
+  function openDeleteConfirm(n, bindings) {
+    closePopup();
+    const div = document.createElement('div');
+    div.className = 'popup delete-popup';
+    const rows = bindings.slice(0, 6).map((b) => `<li>${esc(b.id)} ${esc(b.repo)}:${esc(b.file)}::${esc(b.symbol)}</li>`).join('');
+    div.innerHTML = `<button class="close" data-close>×</button>
+      <h4>删除节点：${esc(n.title)}</h4>
+      <div class="unmock-hint">该节点仍有 ${bindings.length} 条 bindings。误删会丢失代码归属，请选择处理方式：</div>
+      <ul class="unmock-list">${rows}${bindings.length > 6 ? '<li>…</li>' : ''}</ul>
+      <div class="row">
+        <button data-deprecate>标为废弃（保留 To-Delete）</button>
+        <button class="danger" data-force-delete>强制删除（连同 bindings）</button>
+      </div>`;
+    $('popup-layer').appendChild(div);
+    positionPopup(div, window.innerWidth / 2 - 170, 150);
+    div.querySelector('[data-close]').onclick = closePopup;
+    div.querySelector('[data-deprecate]').onclick = () => {
+      closePopup();
+      post({ type: 'node.deprecate', id: n.id, reason: '看板删除时改为废弃' });
+    };
+    div.querySelector('[data-force-delete]').onclick = () => {
+      closePopup();
+      post({ type: 'node.delete', id: n.id, force: true });
+      showToast('节点与 bindings 已强制删除；Ctrl+Z / Cmd+Z 可一键还原', 'info');
+    };
+    state.popup = div;
+  }
+
+  function renderOpsPanel() {
+    const panel = $('ops-panel');
+    if (!panel) {
+      return;
+    }
+    panel.classList.toggle('hidden', !state.opsOpen);
+    if (!state.opsOpen) {
+      panel.innerHTML = '';
+      return;
+    }
+    const entries = opsEntries();
+    const pending = entries.filter((e) => !e.op.done);
+    const done = entries.filter((e) => e.op.done);
+    const rows = pending.map(({ node, op }) => `<div class="ops-row">
+      <button class="op-check" data-op-toggle="${esc(op.id)}" data-op-node="${esc(node.id)}" title="勾选完成">○</button>
+      <span class="op-kind kind-${esc(op.kind)}">${esc(kindLabel(op.kind))}</span>
+      <span class="ops-row-title" data-ops-jump="${esc(node.id)}" title="跳转到 ${esc(node.title)}">${esc(op.title)}</span>
+      <span class="ops-row-node" data-ops-jump="${esc(node.id)}" title="跳转到 ${esc(node.title)}">${esc(node.title)}</span>
+      <button class="op-remove" data-op-remove="${esc(op.id)}" data-op-node="${esc(node.id)}" title="删除该 Ops">×</button>
+    </div>`).join('');
+    panel.innerHTML = `<div class="ops-panel-head">
+        <span>未完成 Ops (${pending.length}/${entries.length})</span>
+        <button data-ops-close title="收起">×</button>
+      </div>
+      ${rows || '<div class="empty">没有未完成的 Ops</div>'}
+      ${done.length ? `<div class="ops-done-summary">已完成 ${done.length} 项</div>` : ''}`;
+  }
+
   /* ---------------- right panel ---------------- */
 
   function bucketHTML(key, title, items, renderItem) {
@@ -1076,6 +1385,35 @@
     return hay.indexOf(term) >= 0;
   }
 
+  function opsSectionHTML(n) {
+    const ops = nodeOps(n);
+    const done = ops.filter((op) => op.done).length;
+    let html = `<div class="section-title">Ops 清单 (${done}/${ops.length})</div>`;
+    if (!ops.length) {
+      html += '<div class="empty">暂无 DDL / 网关配置 / Feature Flag</div>';
+    }
+    for (const op of ops) {
+      html += `<div class="op-row ${op.done ? 'done' : ''}">
+        <button class="op-check" data-op-toggle="${esc(op.id)}" data-op-node="${esc(n.id)}" title="${op.done ? '标记未完成' : '标记完成'}">${op.done ? '✓' : '○'}</button>
+        <span class="op-kind kind-${esc(op.kind)}">${esc(kindLabel(op.kind))}</span>
+        <span class="op-title" title="${esc(op.note || '')}">${esc(op.title)}</span>
+        ${op.note ? `<span class="op-note">${esc(op.note)}</span>` : ''}
+        <button class="op-remove" data-op-remove="${esc(op.id)}" data-op-node="${esc(n.id)}" title="删除该 Ops">×</button>
+      </div>`;
+    }
+    html += `<div class="ops-add">
+      <select id="op-kind-select" title="Ops 类型">
+        <option value="ddl">DDL</option>
+        <option value="gateway">Gateway</option>
+        <option value="flag">Flag</option>
+        <option value="other">Other</option>
+      </select>
+      <input id="op-title-input" placeholder="新增 DDL / 网关配置 / Feature Flag" title="回车或点 + 添加">
+      <button data-op-add="${esc(n.id)}" title="新增 Ops">+</button>
+    </div>`;
+    return html;
+  }
+
   function renderRight() {
     const body = $('diff-body');
     const snap = state.snap;
@@ -1127,10 +1465,12 @@
         html += `<div class="review-note ${r.status === 'resolved' ? 'resolved' : ''}">${esc(r.id)} · ${esc(r.status)}：${esc(r.comment)}</div>`;
       }
     }
+    html += opsSectionHTML(selected);
     html += `<div class="review-actions">
       <button class="primary" data-review-pass="${esc(selected.id)}">Reviewed 通过</button>
       <button data-review-reject="${esc(selected.id)}">打回 + 写批注</button>
       <button class="danger" data-done="${esc(selected.id)}">标记 Done</button>
+      <button class="danger" data-delete-node="${esc(selected.id)}" title="删除节点（有 bindings 时需确认）">删除</button>
     </div>
     <div class="reject-box" id="reject-box">
       <textarea id="reject-note" placeholder="写明具体批注，Agent 下一轮会按批注修复"></textarea>
@@ -1159,7 +1499,19 @@
       <label>tags（逗号分隔）</label><input id="ne-tags" value="${esc((n.tags || []).join(', '))}">
       <label>PRD refs（逗号分隔）</label><input id="ne-refs" value="${esc((n.prd_refs || []).join(', '))}">
       <label class="checkline"><input type="checkbox" id="ne-hold" ${n.hold ? 'checked' : ''}> hold 暂停自动推进</label>
-      <div class="row"><button class="primary" data-save>保存</button><button class="danger" data-deprecate>设 deprecated</button></div>`;
+      <label>Ops 清单（DDL / 网关 / Flag）</label>
+      <div class="editor-ops">${nodeOps(n).map((op) => `<div class="op-row ${op.done ? 'done' : ''}">
+        <button class="op-check" data-editor-op-toggle="${esc(op.id)}" title="${op.done ? '标记未完成' : '标记完成'}">${op.done ? '✓' : '○'}</button>
+        <span class="op-kind kind-${esc(op.kind)}">${esc(kindLabel(op.kind))}</span>
+        <span class="op-title">${esc(op.title)}</span>
+        <button class="op-remove" data-editor-op-remove="${esc(op.id)}" title="删除">×</button>
+      </div>`).join('') || '<div class="empty">暂无 Ops</div>'}</div>
+      <div class="ops-add">
+        <select id="ne-op-kind"><option value="ddl">DDL</option><option value="gateway">Gateway</option><option value="flag">Flag</option><option value="other">Other</option></select>
+        <input id="ne-op-title" placeholder="新增 Ops 标题">
+        <button data-editor-op-add>+</button>
+      </div>
+      <div class="row"><button class="primary" data-save>保存</button><button class="danger" data-deprecate>设 deprecated</button><button class="danger" data-delete>删除</button></div>`;
     $('popup-layer').appendChild(div);
     positionPopup(div, rect ? rect.right + 8 : 200, rect ? rect.top : 120);
 
@@ -1204,6 +1556,37 @@
         return;
       }
       post({ type: 'node.deprecate', id: n.id, reason: '看板操作' });
+      closePopup();
+    };
+    div.querySelector('[data-delete]').onclick = () => {
+      closePopup();
+      requestDeleteNode(n.id);
+    };
+    for (const btn of div.querySelectorAll('[data-editor-op-toggle]')) {
+      btn.onclick = () => {
+        post({ type: 'ops.toggle', nodeId: n.id, opId: btn.dataset.editorOpToggle });
+        closePopup();
+      };
+    }
+    for (const btn of div.querySelectorAll('[data-editor-op-remove]')) {
+      btn.onclick = () => {
+        post({ type: 'ops.remove', nodeId: n.id, opId: btn.dataset.editorOpRemove });
+        closePopup();
+      };
+    }
+    div.querySelector('[data-editor-op-add]').onclick = () => {
+      const titleEl = div.querySelector('#ne-op-title');
+      const title = titleEl ? titleEl.value.trim() : '';
+      if (!title) {
+        showToast('请填写 Ops 标题', 'error');
+        return;
+      }
+      post({
+        type: 'ops.add',
+        nodeId: n.id,
+        kind: selectValue(div.querySelector('#ne-op-kind'), 'other'),
+        title,
+      });
       closePopup();
     };
     state.popup = div;
@@ -1486,6 +1869,33 @@
   });
 
   $('diff-body').addEventListener('click', (e) => {
+    const opToggle = e.target.closest('[data-op-toggle]');
+    if (opToggle) {
+      post({ type: 'ops.toggle', nodeId: opToggle.dataset.opNode, opId: opToggle.dataset.opToggle });
+      return;
+    }
+    const opRemove = e.target.closest('[data-op-remove]');
+    if (opRemove) {
+      post({ type: 'ops.remove', nodeId: opRemove.dataset.opNode, opId: opRemove.dataset.opRemove });
+      return;
+    }
+    const opAdd = e.target.closest('[data-op-add]');
+    if (opAdd) {
+      const kindEl = $('op-kind-select');
+      const titleEl = $('op-title-input');
+      const title = titleEl ? titleEl.value.trim() : '';
+      if (!title) {
+        showToast('请填写 Ops 标题', 'error');
+        return;
+      }
+      post({ type: 'ops.add', nodeId: opAdd.dataset.opAdd, kind: selectValue(kindEl, 'other'), title });
+      return;
+    }
+    const del = e.target.closest('[data-delete-node]');
+    if (del) {
+      requestDeleteNode(del.dataset.deleteNode);
+      return;
+    }
     const head = e.target.closest('[data-bucket]');
     if (head) {
       const key = head.dataset.bucket;
@@ -1633,11 +2043,61 @@
     }
   });
 
+  $('ops-panel').addEventListener('click', (e) => {
+    if (e.target.closest('[data-ops-close]')) {
+      state.opsOpen = false;
+      renderOpsPanel();
+      renderTop();
+      return;
+    }
+    const toggle = e.target.closest('[data-op-toggle]');
+    if (toggle) {
+      post({ type: 'ops.toggle', nodeId: toggle.dataset.opNode, opId: toggle.dataset.opToggle });
+      return;
+    }
+    const remove = e.target.closest('[data-op-remove]');
+    if (remove) {
+      post({ type: 'ops.remove', nodeId: remove.dataset.opNode, opId: remove.dataset.opRemove });
+      return;
+    }
+    const jump = e.target.closest('[data-ops-jump]');
+    if (jump) {
+      const id = jump.dataset.opsJump;
+      state.opsOpen = false;
+      renderOpsPanel();
+      renderTop();
+      selectNode(id, { center: true });
+      return;
+    }
+  });
+
+  $('btn-ops').onclick = () => {
+    state.opsOpen = !state.opsOpen;
+    renderOpsPanel();
+    renderTop();
+  };
+  $('btn-undo').onclick = () => {
+    if (Number((state.snap && state.snap.undo_depth) || 0) <= 0) {
+      showToast('没有可撤销的操作', 'info');
+      return;
+    }
+    post({ type: 'undo' });
+  };
+  $('btn-redo').onclick = () => {
+    if (Number((state.snap && state.snap.redo_depth) || 0) <= 0) {
+      showToast('没有可重做的操作', 'info');
+      return;
+    }
+    post({ type: 'redo' });
+  };
+
   $('btn-ext-canvas').onclick = () => {
     state.showExternalCanvas = !state.showExternalCanvas;
+    layoutLocal(state.showExternalCanvas);
     renderTop();
     renderDAG();
     fitView();
+    post({ type: 'layout', includeExternal: state.showExternalCanvas });
   };
 
   $('btn-refresh').onclick = () => post({ type: 'refresh' });
@@ -1663,6 +2123,25 @@
       } else {
         clearSelection();
       }
+      return;
+    }
+    const typing = isTypingTarget(e.target);
+    if (!typing && (e.ctrlKey || e.metaKey) && !e.altKey) {
+      const key = String(e.key || '').toLowerCase();
+      if (key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        post({ type: 'undo' });
+        return;
+      }
+      if ((key === 'z' && e.shiftKey) || key === 'y') {
+        e.preventDefault();
+        post({ type: 'redo' });
+        return;
+      }
+    }
+    if (!typing && !state.popup && (e.key === 'Delete' || e.key === 'Backspace') && state.selectedNode) {
+      e.preventDefault();
+      requestDeleteNode(state.selectedNode);
     }
   });
 
@@ -1707,6 +2186,7 @@
     renderDAG();
     renderExternalDock();
     renderAnchorLinks();
+    renderOpsPanel();
     renderRight();
   }
 

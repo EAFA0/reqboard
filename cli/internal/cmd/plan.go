@@ -87,12 +87,23 @@ func runLayout(a *Args, rest []string) *Error {
 		if derr != nil {
 			return fail("%v", derr)
 		}
-		plan.Layout(dag)
-		if err := ctx.SaveDAG(dag, "dag.layout", "", "auto left-to-right layout"); err != nil {
+		includeExternal := a.Bool("include-external")
+		plan.LayoutWith(dag, includeExternal)
+		detail := "auto left-to-right layout"
+		if includeExternal {
+			detail = "full graph layout (external sources in column 0)"
+		}
+		if err := ctx.SaveDAG(dag, "dag.layout", "", detail); err != nil {
 			return err
 		}
-		mainN, parkedN := 0, 0
+		mainN, parkedN, sourceN, redlineN := 0, 0, 0, 0
 		for _, n := range dag.Nodes {
+			switch {
+			case n.Scope == model.ScopeExternal || n.Scope == model.ScopeCollaborator:
+				sourceN++
+			case n.Scope == model.ScopeOutOfScope:
+				redlineN++
+			}
 			if n.Scope == model.ScopeMine || n.Status == model.StatusProposed {
 				mainN++
 			} else {
@@ -100,10 +111,20 @@ func runLayout(a *Args, rest []string) *Error {
 			}
 		}
 		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("[REQBOARD LAYOUT] 主画布 %d 个节点已按左细右粗紧凑排布；%d 个外部/红线节点收纳到独立停靠区（不占主画布列宽）。\n", mainN, parkedN))
+		if includeExternal {
+			sb.WriteString(fmt.Sprintf("[REQBOARD LAYOUT] 全图模式：%d 个 external/collaborator 节点排入最左侧 Column 0，%d 个我方节点沿左到右拓扑展开；%d 个红线节点收纳到底部停靠区。\n",
+				sourceN, mainN, redlineN))
+		} else {
+			sb.WriteString(fmt.Sprintf("[REQBOARD LAYOUT] 主画布 %d 个节点已按左细右粗紧凑排布；%d 个外部/红线节点收纳到独立停靠区（不占主画布列宽）。\n", mainN, parkedN))
+		}
+		layoutName := "left-thin-right-thick"
+		if includeExternal {
+			layoutName = "full-graph-external-column-0"
+		}
 		ctx.Emit(sb.String(), map[string]interface{}{
 			"ok": true, "nodes": len(dag.Nodes), "main_nodes": mainN, "parked_nodes": parkedN,
-			"layout": "left-thin-right-thick",
+			"external_nodes": sourceN, "redline_nodes": redlineN,
+			"layout": layoutName, "include_external": includeExternal,
 		})
 		return nil
 	})

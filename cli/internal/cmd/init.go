@@ -66,7 +66,7 @@ func runInit(argv []string) *Error {
 		"requirement_name": name,
 		"repos":            cfg.Repos,
 		"planning_only":    planningOnly,
-		"files":            []string{".reqboard/config.json", ".reqboard/prd.md", ".reqboard/dag.json", ".reqboard/bindings.json", ".reqboard/events.jsonl"},
+		"files":            []string{".reqboard/config.json", ".reqboard/prd.md", ".reqboard/dag.json", ".reqboard/bindings.json", ".reqboard/events.jsonl", ".reqboard/.gitignore"},
 	}
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("[REQBOARD INIT] 需求 worktree: %s\n", root))
@@ -80,7 +80,8 @@ func runInit(argv []string) *Error {
 			sb.WriteString(fmt.Sprintf("    - %s -> %s (base: %s)\n", r.Name, r.Path, r.BaseRef))
 		}
 	}
-	sb.WriteString("  已创建: .reqboard/{config.json,prd.md,dag.json,bindings.json,events.jsonl}\n")
+	sb.WriteString("  已创建: .reqboard/{config.json,prd.md,dag.json,bindings.json,events.jsonl,.gitignore}\n")
+	sb.WriteString("  .reqboard/.gitignore 已忽略 .undo/ 与 .lock，撤销快照不会进入代码改动。\n")
 	sb.WriteString("  默认忽略: " + strings.Join(cfg.IgnoreGlobs, ", ") + "\n")
 	sb.WriteString("\n下一步:\n")
 	sb.WriteString("  1) reqboard prd init <src.md>       # 注入 PRD 锚点\n")

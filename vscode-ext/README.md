@@ -21,13 +21,16 @@
 - 每张外部卡片显示影响我方下游节点数（`→ N`）与 `[✓ Done]` 开关；若存在 `mocked` 出边，会询问是否同时 `--unmock-downstream`（切回 `hard` 并把下游标 `stale`）。
 - 主画布节点上的小胶囊：橙色 `mock:xxx`、灰色 `等:xxx`、绿色 `✓xxx`；点击直接编辑对应外部边。
 - 悬停/点击外部卡片会高亮所有依赖它的我方节点并淡化其他节点，顶部显示关联边状态与备注；点击我方节点会反向高亮 Dock 中的外部卡片。
-- 顶栏 `[画布含外部]` 可临时查看全图；`红线 Out-of-Scope (N)` 胶囊默认折叠，点击展开定位 PRD。
+- 顶栏 `[↩ 撤销 (N)]` / `[↪ 重做 (N)]` 显示可用步数，支持 `Ctrl+Z` / `Cmd+Z` 与 `Ctrl+Shift+Z` / `Cmd+Shift+Z`；输入框聚焦时不拦截浏览器原生撤销。
+- 顶栏 `Ops 清单 (done/total)` 折叠胶囊汇总全需求未完成的 DDL / 网关配置 / Feature Flag，支持直接勾选与跳转所属节点；节点卡片底部显示紧凑 `ops` 徽标。
+- 节点编辑弹层与右栏 `[删除]`：无绑定直接删，有绑定弹窗区分「标为废弃」与「强制删除」；选中节点按 `Delete` / `Backspace` 也可删除，误删可 `Ctrl+Z` 还原。
+- 顶栏 `[画布含外部]` 可查看全图，此时 `external` / `collaborator` 排到最左 Column 0 源头列；`红线 Out-of-Scope (N)` 胶囊默认折叠，点击展开定位 PRD。
 - 点击左栏 PRD 段落会智能定位：命中主画布节点时自动拉近居中并脉冲高亮；纯外部依赖只聚焦 Dock 卡片及其下游，不会把主画布推到空白区；纯红线只展开红线面板。
 - 多节点段落会在画布上方显示「关联节点」快捷条，可一键切换聚焦我方 / 外部 / 红线节点。
 
 ## 使用
 
-1. 安装：`code --install-extension reqboard-vscode-0.1.3.vsix`
+1. 安装：`code --install-extension reqboard-vscode-0.2.0.vsix`
 2. 在需求 worktree 运行 `reqboard init` / `prd init` / `plan import`。
 3. 命令面板执行 **ReqBoard: Open Board**，选择包含 `.reqboard/` 的目录。
 

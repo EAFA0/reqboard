@@ -150,6 +150,7 @@ func Import(dag *model.DAG, doc *prd.Document, f *File, opts Options) (*Result, 
 			Tags:        dedup(pn.Tags),
 			SelfMocks:   []model.SelfMock{},
 			ReviewNotes: []model.ReviewNote{},
+			Ops:         []model.OpItem{},
 			Position:    pos,
 			UpdatedAt:   model.Now(),
 		}
@@ -291,12 +292,22 @@ func dedup(in []string) []string {
 // (mine or proposed nodes). External / collaborator / out-of-scope nodes are
 // parked in a separate compact shelf above the main grid: they must never add
 // phantom columns that stretch the main DAG.
-func Layout(dag *model.DAG) {
+func Layout(dag *model.DAG) { LayoutWith(dag, false) }
+
+// LayoutWith is Layout plus an optional full-graph mode. When includeExternal
+// is true, external / collaborator nodes are placed in the leftmost source
+// column (Column 0) and flow naturally into the left-to-right topology instead
+// of sitting in a long shelf above the canvas.
+func LayoutWith(dag *model.DAG, includeExternal bool) {
 	if len(dag.Nodes) == 0 {
 		return
 	}
 	order, err := dag.TopoSort()
 	if err != nil {
+		return
+	}
+	if includeExternal {
+		layoutFull(dag, order)
 		return
 	}
 	isMain := func(n *model.Node) bool {
@@ -387,6 +398,109 @@ func Layout(dag *model.DAG) {
 			n.Position = model.Position{
 				X: 80.0 + float64(d)*320.0,
 				Y: startY + float64(i)*180.0,
+			}
+		}
+	}
+}
+
+// layoutFull lays out the complete graph. External / collaborator nodes are
+// forced into Column 0; mine nodes are layered after their blocking upstreams.
+// out_of_scope nodes stay in a compact shelf below the flow so they never add
+// phantom columns.
+func layoutFull(dag *model.DAG, order []string) {
+	isSource := func(n *model.Node) bool {
+		return n.Scope == model.ScopeExternal || n.Scope == model.ScopeCollaborator
+	}
+	isRedline := func(n *model.Node) bool { return n.Scope == model.ScopeOutOfScope }
+
+	depth := map[string]int{}
+	inFlow := map[string]bool{}
+	var redlines []*model.Node
+	for _, n := range dag.Nodes {
+		if isRedline(n) {
+			redlines = append(redlines, n)
+			continue
+		}
+		inFlow[n.ID] = true
+	}
+	for _, id := range order {
+		n := dag.Node(id)
+		if n == nil || !inFlow[id] {
+			continue
+		}
+		if isSource(n) {
+			depth[id] = 0
+			continue
+		}
+		for _, e := range dag.InEdges(id) {
+			if !model.BlockingEdge(e.Kind) || !inFlow[e.From] {
+				continue
+			}
+			if depth[e.From]+1 > depth[id] {
+				depth[id] = depth[e.From] + 1
+			}
+		}
+	}
+
+	byDepth := map[int][]*model.Node{}
+	maxDepth, maxCount := 0, 1
+	for _, n := range dag.Nodes {
+		if !inFlow[n.ID] {
+			continue
+		}
+		d := depth[n.ID]
+		byDepth[d] = append(byDepth[d], n)
+		if d > maxDepth {
+			maxDepth = d
+		}
+		if len(byDepth[d]) > maxCount {
+			maxCount = len(byDepth[d])
+		}
+	}
+	scopeRank := func(n *model.Node) int {
+		switch {
+		case isSource(n):
+			return 0
+		case n.Status == model.StatusProposed:
+			return 1
+		default:
+			return 2
+		}
+	}
+	mainBottom := 0.0
+	for d := 0; d <= maxDepth; d++ {
+		nodes := byDepth[d]
+		sort.Slice(nodes, func(i, j int) bool {
+			ri, rj := scopeRank(nodes[i]), scopeRank(nodes[j])
+			if ri != rj {
+				return ri < rj
+			}
+			di, dj := dag.Indegree(nodes[i].ID), dag.Indegree(nodes[j].ID)
+			if di != dj {
+				return di < dj
+			}
+			return nodes[i].Title < nodes[j].Title
+		})
+		startY := 60.0 + float64(maxCount-len(nodes))*90.0
+		for i, n := range nodes {
+			n.Position = model.Position{
+				X: 80.0 + float64(d)*320.0,
+				Y: startY + float64(i)*180.0,
+			}
+			if n.Position.Y+180.0 > mainBottom {
+				mainBottom = n.Position.Y + 180.0
+			}
+		}
+	}
+	if len(redlines) > 0 {
+		sort.SliceStable(redlines, func(i, j int) bool { return redlines[i].Title < redlines[j].Title })
+		const cols = 8
+		const gapX = 280.0
+		const gapY = 150.0
+		for i, n := range redlines {
+			n.Position = model.Position{
+				X: 80.0 + float64(i%cols)*gapX,
+				Y: mainBottom + 80.0 + float64(i/cols)*gapY,
 			}
 		}
 	}

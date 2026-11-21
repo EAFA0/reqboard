@@ -17,6 +17,13 @@ description: 多仓复杂需求的本地控制面：PRD 锚点、功能级 DAG�
 3. `out_of_scope` 红线与 `external` 依赖必须显式建节点，禁止留给 Agent 脑补。
 4. `reqboard status` 检查 Unmapped PRD、覆盖率与 Orphan Diff。
 
+**反碎片化准则（硬要求）**：
+- 多段相关 PRD 锚定到**同一个功能点节点**（复用 `prd_refs`），不要一段一节点。
+- 不为纯名词解释、纯复用老逻辑（0 代码改动）、并列枚举拆孤立开发节点。
+- 只为“有独立代码增量行为 / 独立验收路径”的规则建节点。
+- DDL、网关配置、Feature Flag 等交付动作挂到所属节点的 `ops` 清单，**不新增 DAG 节点**：
+  `reqboard ops add <node_id> --kind ddl|gateway|flag|other --title "..." [--note "..."]`。
+
 ### Goal Orchestrator（`/goal`，只调度不写码）
 循环直到 `QUIESCENT`：
 1. `reqboard dispatch --max-parallel N --session <sid>`
@@ -30,6 +37,8 @@ description: 多仓复杂需求的本地控制面：PRD 锚点、功能级 DAG�
    - 拒绝 `out_of_scope`/`external`/`proposed`/`hold`；注入 PRD 原文、红线、mocked 备注、批注与人工调整。
 2. 只改锚定 PRD 覆盖的行为；每处改动必须：
    `reqboard bind <id> --repo <r> --file <f> --symbol <s> --role impl|mock|test --why "..."`
+   - 大文件多符号一次挂载：`reqboard bind <id> --repo <r> --file <f> --all-symbols --why "..." [--keep-status]`。
+   - 手写业务 mock（如 `mock_provider.go`）显式 `--role mock` 后不会被默认 `**/*_mock.go` / `**/mock_*.go` 吞掉。
 3. 自检：`reqboard check --node <id>` 必须无 Orphan/Broken/To-Delete。
 4. 完结：`reqboard done <id> --evidence ...`；失败按输出的纠偏命令处理，禁止硬标 done。
 5. 发现遗漏/越界：`reqboard propose --from <id> --prd-ref <p:x> --title ... --reason ...`，审批前不要改。
@@ -41,13 +50,17 @@ description: 多仓复杂需求的本地控制面：PRD 锚点、功能级 DAG�
 - **Mock 先行**：`external --mocked--> mine` 仍可进入 P1 带 Mock 并行开发；`mine --> mine` 依赖只卡完结、不卡开工。
 - **外部就绪**：`reqboard done <external-id> [--unmock-downstream]` 或 `node update <id> --status done [--unmock-downstream]` 无需我方代码门禁；`--unmock-downstream` 会把 mocked 出边切回 hard，并把下游 mine 标 `stale`（需拆 Mock 切真联调）。
 - `mocked → hard` 自动把下游标 `stale`。
-- `deprecated` 节点保留 bindings，残留 diff 一直进 `To-Delete`。
+- `deprecated` 节点保留 bindings，残留 diff 一直进 `To-Delete`；误建节点用 `reqboard node delete <id>` 彻底删除（有 bindings 时需 `--force`，否则先提示改用 `deprecate`）。
 - `done` 四道门禁（仅 mine）：前置全 done / 零 Mock 债 / 非 stale 且无 open 批注 / check 干净。
 - `reqboard layout` 只给我方主干（`mine` / `proposed`）排紧凑左到右网格；`external|collaborator|out_of_scope` 收纳到独立停靠区，不占主画布列宽。
+- `reqboard layout --include-external`（看板「画布含外部」）把 `external|collaborator` 排到最左 Column 0 源头列，自然融入左到右拓扑。
+- `reqboard undo` / `redo`：每次写 `dag.json` / `bindings.json` / `config.json` 前自动在 `.reqboard/.undo/` 记录前态快照（最多 20 步，flock 内原子完成）；`status --json` 返回 `undo_depth` / `redo_depth`。
+- 节点级 `ops` 是轻量交付清单（DDL / 网关配置 / Feature Flag），不污染 DAG 节点数；看板顶栏 `Ops 清单 (done/total)` 可汇总勾选与跳转。
+- Diff 采用三点语义：先 `git merge-base <base_ref> HEAD`，再对共同祖先执行 `git diff`，base 分支领先时不会把其新提交误报为反向删除。
 - 人类在看板的修改优先级最高；`claim` 会注入 `[人工最新调整]`。
 
 ## 常用命令
-`status` / `filter show|set` / `dispatch` / `claim` / `bind` / `unbind` / `propose` / `mock add|resolve` / `check --all` / `review-pack` / `done [--unmock-downstream]` / `layout`
+`status` / `filter show|set` / `dispatch` / `claim` / `bind [--all-symbols]` / `unbind` / `propose` / `mock add|resolve` / `ops add|toggle|remove` / `check --all` / `review-pack` / `done [--unmock-downstream]` / `layout [--include-external]` / `node delete [--force]` / `undo` / `redo`
 
-Diff 审计默认排除单测（`exclude_tests=true`）与生成代码；需要收窄/放宽时用 `reqboard filter set --include <globs> --exclude <globs> --exclude-tests=true|false`，`filter show --json` 可回读当前生效规则。
+Diff 审计默认排除单测（`exclude_tests=true`）与生成代码；需要收窄/放宽时用 `reqboard filter set --include <globs> --exclude <globs> --exclude-tests=true|false`，`filter show --json` 可回读当前生效规则。显式 `bind` 的 mock/impl 文件（以及显式绑定的测试文件）会豁免默认噪声过滤，确保手写 mock 与验收代码可见。
 所有命令支持 `--json`；报错文本即规则注入，按提示纠偏。

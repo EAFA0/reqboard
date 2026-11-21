@@ -40,6 +40,7 @@ var boolFlags = map[string]bool{
 	"undo": true, "strict": true, "resolve": true, "merge": true,
 	"allow-unknown-refs": true, "no-layout": true, "force": true,
 	"reset-attempts": true, "auto-layout": true, "unmock-downstream": true,
+	"all-symbols": true, "keep-status": true, "include-external": true,
 }
 
 // ParseArgs parses flags and positionals in any order.
@@ -232,7 +233,7 @@ func Main(argv []string) int {
 		return 0
 	}
 	if argv[0] == "version" || argv[0] == "--version" {
-		fmt.Println("reqboard 0.1.3")
+		fmt.Println("reqboard 0.2.0")
 		return 0
 	}
 
@@ -279,6 +280,12 @@ func Main(argv []string) int {
 		err = runFilter(a, rest)
 	case "layout":
 		err = runLayout(a, rest)
+	case "undo":
+		err = runUndo(a, rest)
+	case "redo":
+		err = runRedo(a, rest)
+	case "ops":
+		err = runOps(a, rest)
 	default:
 		err = &Error{Code: 2, Msg: fmt.Sprintf("unknown command %q", cmd), Text: usage()}
 	}
@@ -320,10 +327,11 @@ func usage() string {
   reqboard repo list | repo add --name <n> --path <dir> [--base <ref>] | repo remove <name> [--force]
   reqboard prd init <src.md> | prd sync <new.md> | prd ignore <p:x> [<p:y>...] [--undo]
   reqboard plan import <plan.json> [--replace] [--no-layout] [--allow-unknown-refs]
-  reqboard node add|update|deprecate|approve|reject|review|fail ...
+  reqboard node add|update|deprecate|delete|approve|reject|review|fail ...
   reqboard edge add|update|remove ...
   reqboard claim <id> [--session <sid>] [--lease <repo:glob>...]
   reqboard bind <id> --repo <r> --file <f> --symbol <s> [--partial <hint>] [--role impl|mock|test] --why <reason> [--session <sid>]
+  reqboard bind <id> --repo <r> --file <f> --all-symbols [--keep-status] [--role impl|mock|test] --why <reason>
   reqboard unbind <binding-id>
   reqboard propose --from <id> --prd-ref <p:x> --title <t> --reason <r>
   reqboard mock add|resolve <id> --desc <d> [--edge <eid>]
@@ -334,9 +342,13 @@ func usage() string {
   reqboard status [--json]
   reqboard filter show [--json]
   reqboard filter set [--include <comma-globs>] [--exclude <comma-globs>] [--exclude-tests=true|false] [--reset]
-  reqboard layout [--auto]
+  reqboard ops add <node_id> --kind ddl|gateway|flag|other --title "..." [--note "..."]
+  reqboard ops toggle|remove <node_id> <op_id>
+  reqboard layout [--auto] [--include-external]
+  reqboard undo | redo
 
-所有命令支持 --json；写操作自动 flock + 原子 rename + events.jsonl 追加。
+所有命令支持 --json；写操作自动 flock + 原子 rename + events.jsonl 追加；
+每次写 dag.json / bindings.json / config.json 前自动记录 .reqboard/.undo 快照（最多 20 步）。
 `
 }
 

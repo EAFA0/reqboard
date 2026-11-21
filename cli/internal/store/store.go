@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 
 	"reqboard/internal/model"
@@ -23,6 +24,9 @@ const DirName = ".reqboard"
 // .reqboard).
 type Store struct {
 	Root string
+
+	snapMu    sync.Mutex
+	snapTaken bool
 }
 
 // Open returns a store for an existing .reqboard workspace.
@@ -105,7 +109,13 @@ func Init(root, name string, repos []model.Repo) (*Store, error) {
 	if err := s.WriteFile("events.jsonl", []byte("")); err != nil {
 		return nil, err
 	}
+	// Undo snapshots and the flock file are runtime state, never code changes.
+	if err := s.WriteFile(".gitignore", []byte("# ReqBoard runtime state\n.undo/\n.lock\n")); err != nil {
+		return nil, err
+	}
 	_ = s.AppendEvent(Event{Actor: "cli", Action: "workspace.init", Detail: "initialized " + name})
+	// The first user command after init must still record its pre-state.
+	s.ResetSnapshotTxn()
 	return s, nil
 }
 
@@ -209,6 +219,9 @@ func (s *Store) LoadConfig() (*model.Config, error) {
 
 // SaveConfig writes config.json.
 func (s *Store) SaveConfig(c *model.Config) error {
+	if err := s.capturePreState("config.json"); err != nil {
+		return err
+	}
 	c.UpdatedAt = model.Now()
 	return s.writeJSON("config.json", c)
 }
@@ -233,6 +246,9 @@ func (s *Store) LoadDAG() (*model.DAG, error) {
 
 // SaveDAG writes dag.json.
 func (s *Store) SaveDAG(d *model.DAG) error {
+	if err := s.capturePreState("dag.json"); err != nil {
+		return err
+	}
 	d.SchemaVersion = model.SchemaVersion
 	return s.writeJSON("dag.json", d)
 }
@@ -254,6 +270,9 @@ func (s *Store) LoadBindings() (*model.Bindings, error) {
 
 // SaveBindings writes bindings.json.
 func (s *Store) SaveBindings(b *model.Bindings) error {
+	if err := s.capturePreState("bindings.json"); err != nil {
+		return err
+	}
 	b.SchemaVersion = model.SchemaVersion
 	return s.writeJSON("bindings.json", b)
 }

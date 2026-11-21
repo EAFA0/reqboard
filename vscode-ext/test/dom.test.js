@@ -20,6 +20,9 @@ const BODY = `<!DOCTYPE html><html><body>
   <span id="orch-state"></span>
   <span id="orch-session"></span>
   <div id="top-stats"></div>
+  <button id="btn-undo"></button>
+  <button id="btn-redo"></button>
+  <button id="btn-ops"></button>
   <button id="btn-ext-canvas"></button>
   <button id="btn-refresh"></button>
   <button id="btn-fit"></button>
@@ -27,6 +30,7 @@ const BODY = `<!DOCTYPE html><html><body>
   <button id="btn-goal"></button>
   <button id="btn-orch"></button>
 </header>
+<div id="ops-panel" class="ops-panel hidden"></div>
 <div id="prd-list"></div>
 <div id="coverage-badge"></div>
 <div id="dag-pane">
@@ -74,8 +78,14 @@ function node(id, title, scope, status, x, y) {
   };
 }
 
+function op(id, kind, title, done, note) {
+  return { id, kind, title, done: !!done, note: note || '' };
+}
+
 const snapshot = {
   config: { repos: [] },
+  undo_depth: 2,
+  redo_depth: 1,
   prd: {
     blocks: [
       {
@@ -125,7 +135,9 @@ const snapshot = {
   events: [],
   dag: {
     nodes: [
-      node('rb-a', '下单', 'mine', 'pending', 80, 440),
+      Object.assign(node('rb-a', '下单', 'mine', 'pending', 80, 440), {
+        ops: [op('op-01', 'ddl', '新增可见性索引', false, '上线前执行'), op('op-02', 'flag', '订单可见性开关', true)],
+      }),
       node('rb-b', '待批节点', 'mine', 'proposed', 400, 440),
       node('rb-ext', 'CRM 接口', 'external', 'pending', 80, 60),
       node('rb-ext2', '商品侧', 'collaborator', 'done', 360, 60),
@@ -143,6 +155,8 @@ const snapshot = {
 
 function boot(data) {
   const { document, window } = parseHTML(BODY);
+  // Each test gets its own snapshot: layout/delete interactions mutate positions.
+  const snap = JSON.parse(JSON.stringify(data || snapshot));
   const messages = [];
   const listeners = {};
   const fakeWindow = {
@@ -164,7 +178,7 @@ function boot(data) {
   const code = fs.readFileSync(path.join(__dirname, '..', 'media', 'board.js'), 'utf8');
   vm.runInContext(code, context);
   for (const fn of listeners.message || []) {
-    fn({ data: { type: 'snapshot', data: data || snapshot } });
+    fn({ data: { type: 'snapshot', data: snap } });
   }
   return { document, window, messages };
 }
@@ -398,6 +412,153 @@ test('keyword search filters right pane without writing config', () => {
   search.value = 'order_api';
   search.dispatchEvent(new window.Event('input', { bubbles: true }));
   assert.strictEqual(document.querySelectorAll('#diff-body .diff-item').length, 2);
+});
+
+function keydown(document, window, target, props) {
+  const ev = new window.Event('keydown', { bubbles: true, cancelable: true });
+  Object.assign(ev, props);
+  target.dispatchEvent(ev);
+}
+
+test('undo/redo toolbar buttons expose depth and post history commands', () => {
+  const { document, window, messages } = boot();
+  const undo = document.getElementById('btn-undo');
+  const redo = document.getElementById('btn-redo');
+  assert.strictEqual(undo.textContent, '↩ 撤销 (2)');
+  assert.strictEqual(redo.textContent, '↪ 重做 (1)');
+  assert.strictEqual(undo.disabled, false);
+  assert.strictEqual(redo.disabled, false);
+  click(window, undo);
+  assert.strictEqual(messages.pop().type, 'undo');
+  click(window, redo);
+  assert.strictEqual(messages.pop().type, 'redo');
+});
+
+test('Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z work outside inputs and are not hijacked in inputs', () => {
+  const { document, window, messages } = boot();
+  const before = messages.length;
+  keydown(document, window, document.body, { key: 'z', ctrlKey: true });
+  assert.strictEqual(messages[messages.length - 1].type, 'undo');
+  keydown(document, window, document.body, { key: 'z', metaKey: true, shiftKey: true });
+  assert.strictEqual(messages[messages.length - 1].type, 'redo');
+  const input = document.getElementById('df-search');
+  input.value = 'abc';
+  keydown(document, window, input, { key: 'z', ctrlKey: true });
+  assert.strictEqual(messages.length, before + 2, 'input native undo must not be intercepted');
+});
+
+test('Delete removes an unbound node and asks before force-deleting a bound node', () => {
+  const { document, window, messages } = boot();
+  click(window, document.querySelector('.prd-block[data-anchor="p-main"]'));
+  keydown(document, window, document.body, { key: 'Delete' });
+  const direct = messages.filter((m) => m.type === 'node.delete').pop();
+  assert.ok(direct, 'node.delete message missing');
+  assert.strictEqual(direct.id, 'rb-a');
+  assert.ok(!direct.force, 'unbound delete must not force');
+
+  const boundSnap = JSON.parse(JSON.stringify(snapshot));
+  boundSnap.bindings = [{
+    id: 'bd-1', node_id: 'rb-a', repo: 'order_api', file: 'handler/order_query.go',
+    symbol: 'QueryOrder', role: 'impl', why: 'PRD 3',
+  }];
+  const bound = boot(boundSnap);
+  click(bound.window, bound.document.querySelector('.prd-block[data-anchor="p-main"]'));
+  keydown(bound.document, bound.window, bound.document.body, { key: 'Delete' });
+  const popup = bound.document.querySelector('.delete-popup');
+  assert.ok(popup, 'delete confirm popup missing for bound node');
+  assert.ok(popup.textContent.includes('标为废弃'));
+  assert.ok(popup.textContent.includes('强制删除'));
+  click(bound.window, popup.querySelector('[data-force-delete]'));
+  const forced = bound.messages.filter((m) => m.type === 'node.delete').pop();
+  assert.strictEqual(forced.force, true);
+});
+
+test('node editor delete button routes through the delete guard', () => {
+  const { document, window, messages } = boot();
+  click(window, document.querySelector('.dag-node[data-node="rb-b"]'));
+  const editor = document.querySelector('.popup');
+  assert.ok(editor, 'node editor missing');
+  click(window, editor.querySelector('[data-delete]'));
+  const msg = messages.filter((m) => m.type === 'node.delete').pop();
+  assert.ok(msg && msg.id === 'rb-b');
+});
+
+test('ops capsule aggregates pending items, toggles and jumps to the owning node', () => {
+  const { document, window, messages } = boot();
+  const btn = document.getElementById('btn-ops');
+  assert.strictEqual(btn.textContent, 'Ops 清单 (1/2)');
+  const card = document.querySelector('.dag-node[data-node="rb-a"]');
+  const chips = [...card.querySelectorAll('.op-chip')];
+  assert.ok(chips.some((c) => c.textContent.includes('DDL') && !c.classList.contains('done')), 'pending DDL chip missing');
+  assert.ok(chips.some((c) => c.textContent.includes('✓Flag') && c.classList.contains('done')), 'done Flag chip missing');
+
+  click(window, btn);
+  const panel = document.getElementById('ops-panel');
+  assert.ok(!panel.classList.contains('hidden'), 'ops panel hidden');
+  assert.ok(panel.textContent.includes('未完成 Ops (1/2)'));
+  assert.ok(panel.textContent.includes('新增可见性索引'));
+  click(window, panel.querySelector('[data-op-toggle]'));
+  const toggle = messages.pop();
+  assert.strictEqual(toggle.type, 'ops.toggle');
+  assert.strictEqual(toggle.nodeId, 'rb-a');
+  assert.strictEqual(toggle.opId, 'op-01');
+  click(window, panel.querySelector('[data-ops-jump]'));
+  assert.ok(document.querySelector('.dag-node[data-node="rb-a"]').classList.contains('selected'));
+});
+
+test('node editor supports adding and toggling ops', () => {
+  const { document, window, messages } = boot();
+  click(window, document.querySelector('.dag-node[data-node="rb-a"]'));
+  const editor = document.querySelector('.popup');
+  assert.ok(editor, 'node editor missing');
+  click(window, editor.querySelector('[data-editor-op-toggle="op-01"]'));
+  assert.strictEqual(messages.pop().type, 'ops.toggle');
+  click(window, document.querySelector('.dag-node[data-node="rb-a"]'));
+  const editor2 = document.querySelector('.popup');
+  editor2.querySelector('#ne-op-title').value = '编辑器新增 Flag';
+  editor2.querySelector('#ne-op-kind').selectedIndex = 2;
+  click(window, editor2.querySelector('[data-editor-op-add]'));
+  const add = messages.pop();
+  assert.strictEqual(add.type, 'ops.add');
+  assert.strictEqual(add.kind, 'flag');
+  assert.strictEqual(add.title, '编辑器新增 Flag');
+});
+
+test('right pane adds and toggles node ops', () => {
+  const { document, window, messages } = boot();
+  click(window, document.querySelector('.prd-block[data-anchor="p-main"]'));
+  const input = document.getElementById('op-title-input');
+  assert.ok(input, 'ops add input missing');
+  input.value = '网关白名单';
+  document.getElementById('op-kind-select').selectedIndex = 1;
+  click(window, document.querySelector('[data-op-add="rb-a"]'));
+  const add = messages.pop();
+  assert.strictEqual(add.type, 'ops.add');
+  assert.strictEqual(add.kind, 'gateway');
+  assert.strictEqual(add.title, '网关白名单');
+  click(window, document.querySelector('#diff-body [data-op-toggle="op-01"]'));
+  const toggle = messages.pop();
+  assert.strictEqual(toggle.type, 'ops.toggle');
+  assert.strictEqual(toggle.opId, 'op-01');
+});
+
+test('full-graph mode lays external sources in column 0', () => {
+  const { document, window, messages } = boot();
+  click(window, document.getElementById('btn-ext-canvas'));
+  const layout = messages.filter((m) => m.type === 'layout').pop();
+  assert.ok(layout && layout.includeExternal === true, 'layout includeExternal message missing');
+  for (const id of ['rb-ext', 'rb-ext2', 'rb-ext3']) {
+    const el = document.querySelector(`.dag-node[data-node="${id}"]`);
+    assert.ok(el, id + ' missing from full canvas');
+    assert.strictEqual(el.style.left, '80px', id + ' not in column 0: ' + el.style.left);
+  }
+  const mine = document.querySelector('.dag-node[data-node="rb-a"]');
+  assert.ok(parseFloat(mine.style.left) > 80, 'mine node should be right of sources: ' + mine.style.left);
+
+  click(window, document.getElementById('btn-ext-canvas'));
+  const back = messages.filter((m) => m.type === 'layout').pop();
+  assert.strictEqual(back.includeExternal, false);
+  assert.strictEqual(document.querySelector('.dag-node[data-node="rb-a"]').style.left, '80px');
 });
 
 console.log('all webview DOM tests passed');

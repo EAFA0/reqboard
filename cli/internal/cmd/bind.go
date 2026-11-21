@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"reqboard/internal/astx"
+	"reqboard/internal/gitx"
 	"reqboard/internal/model"
 	"reqboard/internal/store"
 )
@@ -25,8 +26,16 @@ func runBind(a *Args, rest []string) *Error {
 	repoName := a.Str("repo")
 	file := a.Str("file")
 	symbol := strings.TrimSpace(a.Str("symbol"))
-	if repoName == "" || file == "" || symbol == "" {
-		return fail("--repo, --file and --symbol are required")
+	allSymbols := a.Bool("all-symbols")
+	keepStatus := a.Bool("keep-status")
+	if repoName == "" || file == "" {
+		return fail("--repo and --file are required")
+	}
+	if allSymbols && symbol != "" {
+		return fail("--symbol 与 --all-symbols 只能二选一")
+	}
+	if !allSymbols && symbol == "" {
+		return fail("--symbol is required (or use --all-symbols)")
 	}
 	role := a.Str("role")
 	if role == "" {
@@ -36,6 +45,9 @@ func runBind(a *Args, rest []string) *Error {
 		return fail("invalid --role %q (impl|mock|test)", role)
 	}
 	partial := a.Str("partial")
+	if allSymbols && partial != "" {
+		return fail("--partial 仅适用于单符号绑定，不能与 --all-symbols 同用")
+	}
 
 	ctx, e := NewCtx(a)
 	if e != nil {
@@ -74,6 +86,7 @@ func runBind(a *Args, rest []string) *Error {
 			storedFile = filepath.ToSlash(rel)
 		}
 	}
+	storedFile = filepath.ToSlash(filepath.Clean(filepath.FromSlash(storedFile)))
 
 	return ctx.WithLock(func() *Error {
 		dag, derr := ctx.Store.LoadDAG()
@@ -106,21 +119,39 @@ func runBind(a *Args, rest []string) *Error {
 			return &Error{Code: 1, Msg: "node is done", Text: "[REQBOARD BLOCKED] 节点已 done；如需返工请人类先 Review 打回。\n"}
 		}
 
-		if strings.EqualFold(filepath.Ext(abs), ".go") {
-			src, err := os.ReadFile(abs)
+		fileLevel := false
+		var targets []string
+		if allSymbols {
+			baseRef := repo.BaseRef
+			if baseRef == "" {
+				baseRef = "HEAD"
+			}
+			found, level, err := changedSymbols(repoPath, baseRef, storedFile, abs)
 			if err != nil {
-				return fail("read %s: %v", abs, err)
+				return fail("%v", err)
 			}
-			syms, perr := astx.ParseGo(storedFile, src)
-			if perr != nil {
-				return fail("parse Go file %s: %v", storedFile, perr)
+			targets, fileLevel = found, level
+			if len(targets) == 0 && !fileLevel {
+				return fail("文件 %s 相对 base 没有可绑定的符号改动", storedFile)
 			}
-			if sym, names := astx.FindSymbol(syms, symbol); sym == nil {
-				sort.Strings(names)
-				if len(names) > 40 {
-					names = append(names[:40], "…")
+		} else {
+			targets = []string{symbol}
+			if strings.EqualFold(filepath.Ext(abs), ".go") {
+				src, err := os.ReadFile(abs)
+				if err != nil {
+					return fail("read %s: %v", abs, err)
 				}
-				return &Error{Code: 1, Msg: "symbol not found: " + symbol, Text: fmt.Sprintf("[REQBOARD BLOCKED] 符号 %q 不存在于 %s:%s\n  -> 该文件真实顶层符号: %s\n  -> 请用真实符号重试；若文件改错，先 `reqboard check --node %s` 确认。\n", symbol, repoName, storedFile, strings.Join(names, ", "), id)}
+				syms, perr := astx.ParseGo(storedFile, src)
+				if perr != nil {
+					return fail("parse Go file %s: %v", storedFile, perr)
+				}
+				if sym, names := astx.FindSymbol(syms, symbol); sym == nil {
+					sort.Strings(names)
+					if len(names) > 40 {
+						names = append(names[:40], "…")
+					}
+					return &Error{Code: 1, Msg: "symbol not found: " + symbol, Text: fmt.Sprintf("[REQBOARD BLOCKED] 符号 %q 不存在于 %s:%s\n  -> 该文件真实顶层符号: %s\n  -> 请用真实符号重试；若文件改错，先 `reqboard check --node %s` 确认。\n", symbol, repoName, storedFile, strings.Join(names, ", "), id)}
+				}
 			}
 		}
 
@@ -138,64 +169,162 @@ func runBind(a *Args, rest []string) *Error {
 		if session == "" {
 			session = n.SessionID
 		}
-		updated := false
-		for i := range bindings.Bindings {
-			b := &bindings.Bindings[i]
-			if b.NodeID == id && b.Repo == repoName && filepath.ToSlash(b.File) == storedFile && b.Symbol == symbol {
-				b.Granularity = granularity
-				b.AnchorHint = hint
-				b.Role = role
-				b.Why = why
-				b.SessionID = session
-				b.BoundAt = model.Now()
-				updated = true
-				break
+		if fileLevel {
+			targets = []string{""}
+			granularity = model.GranularityFile
+			hint = ""
+		}
+		var bound []*model.Binding
+		created, updated := 0, 0
+		for _, sym := range targets {
+			binding, isNew := upsertBinding(bindings, id, repoName, storedFile, sym, granularity, hint, role, why, session)
+			bound = append(bound, binding)
+			if isNew {
+				created++
+			} else {
+				updated++
 			}
 		}
-		var binding *model.Binding
-		if updated {
-			for i := range bindings.Bindings {
-				if bindings.Bindings[i].NodeID == id && bindings.Bindings[i].Repo == repoName && filepath.ToSlash(bindings.Bindings[i].File) == storedFile && bindings.Bindings[i].Symbol == symbol {
-					binding = &bindings.Bindings[i]
-					break
-				}
-			}
-		} else {
-			used := map[string]bool{}
-			for _, b := range bindings.Bindings {
-				used[b.ID] = true
-			}
-			nb := model.Binding{
-				ID:     model.NewID("bd", used, id, repoName, storedFile, symbol, model.Now()),
-				NodeID: id, Repo: repoName, File: storedFile,
-				Granularity: granularity, Symbol: symbol, AnchorHint: hint,
-				Role: role, Why: why, SessionID: session, BoundAt: model.Now(),
-			}
-			bindings.Bindings = append(bindings.Bindings, nb)
-			binding = &bindings.Bindings[len(bindings.Bindings)-1]
+		symbols := make([]string, 0, len(bound))
+		for _, b := range bound {
+			symbols = append(symbols, b.Symbol)
 		}
-		if err := ctx.SaveBindings(bindings, "bind", id, fmt.Sprintf("%s:%s::%s (%s)", repoName, storedFile, symbol, role)); err != nil {
+		detail := fmt.Sprintf("%s:%s::%s (%s)", repoName, storedFile, strings.Join(symbols, ","), role)
+		if err := ctx.SaveBindings(bindings, "bind", id, detail); err != nil {
 			return err
 		}
-		if n.Status == model.StatusPending {
+		statusChanged := false
+		if n.Status == model.StatusPending && !keepStatus {
 			n.Status = model.StatusInProgress
 			n.UpdatedAt = model.Now()
+			statusChanged = true
 			if err := ctx.SaveDAG(dag, "node.status", id, "in_progress (first bind)"); err != nil {
 				return err
 			}
 		}
-		action := "新增"
-		if updated {
-			action = "更新"
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("[REQBOARD BIND] %s %s\n", id, n.Title))
+		if allSymbols {
+			sb.WriteString(fmt.Sprintf("  文件级批量挂载：新增 %d 条，更新 %d 条\n", created, updated))
+		} else {
+			verb := "新增"
+			if created == 0 {
+				verb = "更新"
+			}
+			sb.WriteString(fmt.Sprintf("  %s绑定 %s\n", verb, bound[0].ID))
 		}
-		msg := fmt.Sprintf("[REQBOARD BIND] %s %s\n  %s绑定 %s: %s:%s::%s  role=%s\n  why: %s\n", id, n.Title, action, binding.ID, repoName, storedFile, symbol, role, why)
+		for _, b := range bound {
+			sym := b.Symbol
+			if sym == "" {
+				sym = "(file)"
+			}
+			sb.WriteString(fmt.Sprintf("    - %s  %s:%s::%s  role=%s\n", b.ID, repoName, storedFile, sym, role))
+		}
+		sb.WriteString("  why: " + why + "\n")
 		if granularity == model.GranularityPartialSymbol {
-			msg += "  partial anchor: " + hint + "（多节点共享公共符号时用于区分改动块）\n"
+			sb.WriteString("  partial anchor: " + hint + "（多节点共享公共符号时用于区分改动块）\n")
 		}
-		msg += "  下一步: 改码后 `reqboard check --node " + id + "`；无 Orphan/Broken 再 `reqboard done " + id + "`。\n"
-		ctx.Emit(msg, map[string]interface{}{"ok": true, "binding": binding, "updated": updated})
+		if keepStatus && !statusChanged {
+			sb.WriteString("  --keep-status: 节点状态保持 " + n.Status + "\n")
+		}
+		sb.WriteString("  下一步: 改码后 `reqboard check --node " + id + "`；无 Orphan/Broken 再 `reqboard done " + id + "`。\n")
+		data := map[string]interface{}{"ok": true, "bindings": bound, "created": created, "updated": updated}
+		if len(bound) == 1 {
+			data["binding"] = bound[0]
+			data["updated"] = created == 0
+		}
+		ctx.Emit(sb.String(), data)
 		return nil
 	})
+}
+
+// changedSymbols projects the file's diff hunks onto its Go AST symbols. For
+// non-Go files (or changes outside any symbol) it returns fileLevel=true so the
+// caller records one file-granularity binding instead.
+func changedSymbols(repoPath, baseRef, storedFile, abs string) ([]string, bool, error) {
+	files, err := gitx.Collect(repoPath, baseRef)
+	if err != nil {
+		return nil, false, err
+	}
+	wantAbs := filepath.Clean(abs)
+	var fd *gitx.FileDiff
+	for i := range files {
+		p := filepath.Clean(filepath.Join(repoPath, filepath.FromSlash(files[i].Path)))
+		if p == wantAbs || filepath.ToSlash(files[i].Path) == storedFile {
+			fd = &files[i]
+			break
+		}
+	}
+	if fd == nil {
+		return nil, false, fmt.Errorf("文件 %s 相对 %s 无改动，无法 --all-symbols", storedFile, baseRef)
+	}
+	if fd.Binary || !strings.EqualFold(filepath.Ext(abs), ".go") {
+		return nil, true, nil
+	}
+	src, err := os.ReadFile(abs)
+	if err != nil {
+		return nil, false, err
+	}
+	hunks := fd.Hunks
+	if fd.Untracked {
+		lines := strings.Split(strings.TrimSuffix(string(src), "\n"), "\n")
+		if len(src) == 0 {
+			lines = nil
+		}
+		h := gitx.Hunk{NewStart: 1, NewCount: len(lines), Lines: make([]string, 0, len(lines))}
+		for _, line := range lines {
+			h.Lines = append(h.Lines, "+"+line)
+		}
+		hunks = []gitx.Hunk{h}
+	}
+	syms, perr := astx.ParseGo(storedFile, src)
+	if perr != nil {
+		return nil, false, fmt.Errorf("parse Go file %s: %w", storedFile, perr)
+	}
+	hits := astx.Project(syms, hunks)
+	seen := map[string]bool{}
+	var out []string
+	for _, h := range hits {
+		if h.Symbol.Name == "" || seen[h.Symbol.Name] {
+			continue
+		}
+		seen[h.Symbol.Name] = true
+		out = append(out, h.Symbol.Name)
+	}
+	sort.Strings(out)
+	if len(out) == 0 {
+		// Changes outside any top-level symbol (imports/package comments) still
+		// need ownership: fall back to a file-granularity binding.
+		return nil, true, nil
+	}
+	return out, false, nil
+}
+
+func upsertBinding(bindings *model.Bindings, nodeID, repoName, storedFile, symbol, granularity, hint, role, why, session string) (*model.Binding, bool) {
+	for i := range bindings.Bindings {
+		b := &bindings.Bindings[i]
+		if b.NodeID == nodeID && b.Repo == repoName && filepath.ToSlash(b.File) == storedFile && b.Symbol == symbol {
+			b.Granularity = granularity
+			b.AnchorHint = hint
+			b.Role = role
+			b.Why = why
+			b.SessionID = session
+			b.BoundAt = model.Now()
+			return b, false
+		}
+	}
+	used := map[string]bool{}
+	for _, b := range bindings.Bindings {
+		used[b.ID] = true
+	}
+	nb := model.Binding{
+		ID:     model.NewID("bd", used, nodeID, repoName, storedFile, symbol, model.Now()),
+		NodeID: nodeID, Repo: repoName, File: storedFile,
+		Granularity: granularity, Symbol: symbol, AnchorHint: hint,
+		Role: role, Why: why, SessionID: session, BoundAt: model.Now(),
+	}
+	bindings.Bindings = append(bindings.Bindings, nb)
+	return &bindings.Bindings[len(bindings.Bindings)-1], true
 }
 
 func runUnbind(a *Args, rest []string) *Error {

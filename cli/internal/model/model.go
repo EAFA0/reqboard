@@ -56,6 +56,14 @@ const (
 	GranularityFile          = "file"
 )
 
+// Op kinds for the node-level lightweight checklist.
+const (
+	OpDDL     = "ddl"
+	OpGateway = "gateway"
+	OpFlag    = "flag"
+	OpOther   = "other"
+)
+
 // DefaultIgnoreGlobs keeps generated code out of the diff noise.
 var DefaultIgnoreGlobs = []string{
 	"**/*_mock.go",
@@ -144,6 +152,17 @@ type Evidence struct {
 	Extra     []string `json:"extra,omitempty"`
 }
 
+// OpItem is a lightweight delivery checklist item attached to a node. DDL,
+// gateway configuration and feature-flag chores stay with the business node
+// they unblock and never inflate the DAG node count.
+type OpItem struct {
+	ID    string `json:"id"`
+	Kind  string `json:"kind"` // ddl | gateway | flag | other
+	Title string `json:"title"`
+	Done  bool   `json:"done"`
+	Note  string `json:"note,omitempty"`
+}
+
 // Node is one business function / rule in the DAG.
 type Node struct {
 	ID           string       `json:"id"`
@@ -157,6 +176,7 @@ type Node struct {
 	Tags         []string     `json:"tags,omitempty"`
 	SelfMocks    []SelfMock   `json:"self_mocks"`
 	ReviewNotes  []ReviewNote `json:"review_notes"`
+	Ops          []OpItem     `json:"ops,omitempty"`
 	Evidence     Evidence     `json:"evidence"`
 	SessionID    string       `json:"session_id,omitempty"`
 	Hold         bool         `json:"hold"`
@@ -286,6 +306,15 @@ func ValidEdgeKind(s string) bool {
 func ValidRole(s string) bool {
 	switch s {
 	case RoleImpl, RoleMock, RoleTest:
+		return true
+	}
+	return false
+}
+
+// ValidOpKind reports whether s is a known node op kind.
+func ValidOpKind(s string) bool {
+	switch s {
+	case OpDDL, OpGateway, OpFlag, OpOther:
 		return true
 	}
 	return false

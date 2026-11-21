@@ -265,6 +265,39 @@ export class BoardPanel {
       case 'node.deprecate':
         await this.exec(['node', 'deprecate', String(msg.id), '--reason', String(msg.reason || ''), '--actor', 'human']);
         return;
+      case 'node.delete': {
+        const args = ['node', 'delete', String(msg.id), '--actor', 'human'];
+        if (msg.force) {
+          args.push('--force');
+        }
+        await this.exec(args, msg.force ? '节点与 bindings 已强制删除（Ctrl+Z 可撤销）' : '节点已删除（Ctrl+Z 可撤销）');
+        return;
+      }
+      case 'undo':
+        await this.exec(['undo', '--actor', 'human'], '已撤销 1 步');
+        return;
+      case 'redo':
+        await this.exec(['redo', '--actor', 'human'], '已重做 1 步');
+        return;
+      case 'ops.add': {
+        const title = String(msg.title || '').trim();
+        if (!title) {
+          this.post({ type: 'error', message: 'Ops 标题不能为空' });
+          return;
+        }
+        const args = ['ops', 'add', String(msg.nodeId), '--kind', String(msg.kind || 'other'), '--title', title, '--actor', 'human'];
+        if (msg.note) {
+          args.push('--note', String(msg.note));
+        }
+        await this.exec(args, 'Ops 已新增');
+        return;
+      }
+      case 'ops.toggle':
+        await this.exec(['ops', 'toggle', String(msg.nodeId), String(msg.opId), '--actor', 'human']);
+        return;
+      case 'ops.remove':
+        await this.exec(['ops', 'remove', String(msg.nodeId), String(msg.opId), '--actor', 'human'], 'Ops 已删除');
+        return;
       case 'node.approve':
         await this.exec(['node', 'approve', String(msg.id), '--actor', 'human']);
         return;
@@ -315,9 +348,14 @@ export class BoardPanel {
         await this.exec(args);
         return;
       }
-      case 'layout':
-        await this.exec(['layout', '--actor', 'human'], '已按左细右粗重新排版');
+      case 'layout': {
+        const args = ['layout', '--actor', 'human'];
+        if (msg.includeExternal) {
+          args.push('--include-external');
+        }
+        await this.exec(args, msg.includeExternal ? '全图模式：外部依赖已排到最左列' : '已按左细右粗重新排版');
         return;
+      }
       case 'done': {
         const args = ['done', String(msg.id), '--actor', 'human'];
         if (msg.unmock) {

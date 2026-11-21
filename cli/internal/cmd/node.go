@@ -27,6 +27,11 @@ func runNode(a *Args, rest []string) *Error {
 			return fail("usage: reqboard node deprecate <id> [--reason ...]")
 		}
 		return nodeDeprecate(a, pos[1])
+	case "delete", "rm":
+		if len(pos) < 2 {
+			return fail("usage: reqboard node delete <id> [--force]")
+		}
+		return nodeDelete(a, pos[1])
 	case "approve":
 		if len(pos) < 2 {
 			return fail("usage: reqboard node approve <id>")
@@ -113,6 +118,7 @@ func nodeAdd(a *Args, rest []string) *Error {
 			Tags:        dedupStrings(a.Strs("tag")),
 			SelfMocks:   []model.SelfMock{},
 			ReviewNotes: []model.ReviewNote{},
+			Ops:         []model.OpItem{},
 			SessionID:   a.Str("session"),
 			Position:    pos,
 			UpdatedAt:   model.Now(),
@@ -317,6 +323,88 @@ func nodeDeprecate(a *Args, id string) *Error {
 			sb.WriteString("  原因: " + reason + "\n")
 		}
 		ctx.Emit(sb.String(), map[string]interface{}{"ok": true, "node_id": id, "status": n.Status, "kept_bindings": kept})
+		return nil
+	})
+}
+
+// nodeDelete removes a mis-created node for real. A node with bindings is
+// refused unless --force is passed, so accidental deletion of code ownership
+// stays recoverable via `node deprecate` (To-Delete debris tracking).
+func nodeDelete(a *Args, id string) *Error {
+	force := a.Bool("force")
+	ctx, e := NewCtx(a)
+	if e != nil {
+		return e
+	}
+	return ctx.WithLock(func() *Error {
+		dag, derr := ctx.Store.LoadDAG()
+		if derr != nil {
+			return fail("%v", derr)
+		}
+		n, ne := findNodeOrFail(dag, id)
+		if ne != nil {
+			return ne
+		}
+		bindings, berr := ctx.Store.LoadBindings()
+		if berr != nil {
+			return fail("%v", berr)
+		}
+		owned := bindings.BindingsForNode(id)
+		if len(owned) > 0 && !force {
+			var refs []string
+			for _, b := range owned {
+				refs = append(refs, fmt.Sprintf("%s(%s:%s::%s)", b.ID, b.Repo, b.File, b.Symbol))
+			}
+			return &Error{
+				Code: 1, Msg: "node still has bindings",
+				Text: fmt.Sprintf("[REQBOARD BLOCKED] 节点 %s 仍有 %d 条 bindings：%s\n  -> 若只是需求砍掉/方案推翻，请用 `reqboard node deprecate %s --reason \"...\"` 保留 To-Delete 残骸追踪；\n  -> 若确认是误建节点，加 `--force` 连同 bindings 与关联边一并删除。\n",
+					id, len(owned), strings.Join(refs, ", "), id),
+			}
+		}
+		removedBindings := 0
+		if len(owned) > 0 || bindings.LeaseFor(id) != nil {
+			var kept []model.Binding
+			for _, b := range bindings.Bindings {
+				if b.NodeID == id {
+					removedBindings++
+					continue
+				}
+				kept = append(kept, b)
+			}
+			bindings.Bindings = kept
+			bindings.RemoveLeases(id)
+			if err := ctx.SaveBindings(bindings, "node.delete.bindings", id, fmt.Sprintf("removed %d bindings", removedBindings)); err != nil {
+				return err
+			}
+		}
+		removedEdges := 0
+		var keptEdges []*model.Edge
+		for _, ed := range dag.Edges {
+			if ed.From == id || ed.To == id {
+				removedEdges++
+				continue
+			}
+			keptEdges = append(keptEdges, ed)
+		}
+		dag.Edges = keptEdges
+		var keptNodes []*model.Node
+		for _, x := range dag.Nodes {
+			if x.ID == id {
+				continue
+			}
+			keptNodes = append(keptNodes, x)
+		}
+		dag.Nodes = keptNodes
+		detail := fmt.Sprintf("removed node, %d edges, %d bindings", removedEdges, removedBindings)
+		if err := ctx.SaveDAG(dag, "node.delete", id, detail); err != nil {
+			return err
+		}
+		ctx.Emit(fmt.Sprintf("[REQBOARD NODE DELETE] %s %s\n  已删除节点、%d 条关联边、%d 条 bindings；可用 `reqboard undo` 一键还原。\n",
+			id, n.Title, removedEdges, removedBindings),
+			map[string]interface{}{
+				"ok": true, "node_id": id, "title": n.Title,
+				"removed_edges": removedEdges, "removed_bindings": removedBindings, "forced": force,
+			})
 		return nil
 	})
 }

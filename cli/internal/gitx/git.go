@@ -36,6 +36,34 @@ type FileDiff struct {
 
 var hunkRe = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$`)
 
+// MergeBase returns the common ancestor of ref and HEAD. Diffing against this
+// SHA is the three-dot semantics: it includes committed branch changes plus
+// uncommitted working-tree changes, without reporting base-branch-only commits
+// as reverse deletions.
+func MergeBase(repoPath, ref string) (string, error) {
+	out, err := run(repoPath, "merge-base", ref, "HEAD")
+	if err != nil {
+		return "", err
+	}
+	sha := strings.TrimSpace(out)
+	if sha == "" {
+		return "", fmt.Errorf("git merge-base %s HEAD returned no ancestor", ref)
+	}
+	return sha, nil
+}
+
+// ResolveBase returns the merge-base SHA for baseRef, falling back to the
+// original ref when merge-base cannot be computed (detached/odd histories).
+func ResolveBase(repoPath, baseRef string) string {
+	if strings.TrimSpace(baseRef) == "" {
+		return "HEAD"
+	}
+	if sha, err := MergeBase(repoPath, baseRef); err == nil && sha != "" {
+		return sha
+	}
+	return baseRef
+}
+
 // Collect returns all working-tree changes of a repo against baseRef, including
 // untracked files. Generated files are NOT filtered here (the audit layer does
 // that so callers can see the raw set).
@@ -43,7 +71,8 @@ func Collect(repoPath, baseRef string) ([]FileDiff, error) {
 	if baseRef == "" {
 		baseRef = "HEAD"
 	}
-	out, err := run(repoPath, "diff", "--unified=0", "--no-color", "--no-ext-diff", "--no-prefix", baseRef, "--")
+	base := ResolveBase(repoPath, baseRef)
+	out, err := run(repoPath, "diff", "--unified=0", "--no-color", "--no-ext-diff", "--no-prefix", base, "--")
 	if err != nil {
 		return nil, fmt.Errorf("git diff in %s: %w", repoPath, err)
 	}
@@ -213,7 +242,8 @@ func DiffFile(repoPath, baseRef, path string, context int) ([]Hunk, error) {
 	if context < 0 {
 		context = 0
 	}
-	out, err := run(repoPath, "diff", fmt.Sprintf("--unified=%d", context), "--no-color", "--no-ext-diff", "--no-prefix", baseRef, "--", path)
+	base := ResolveBase(repoPath, baseRef)
+	out, err := run(repoPath, "diff", fmt.Sprintf("--unified=%d", context), "--no-color", "--no-ext-diff", "--no-prefix", base, "--", path)
 	if err != nil {
 		return nil, err
 	}

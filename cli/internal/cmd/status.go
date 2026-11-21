@@ -124,6 +124,17 @@ func runStatus(a *Args, rest []string) *Error {
 			holds++
 		}
 	}
+	knownStatuses := []string{
+		model.StatusDone, model.StatusReviewed, model.StatusImplemented,
+		model.StatusMocked, model.StatusInProgress, model.StatusChangesRequested,
+		model.StatusPending, model.StatusProposed, model.StatusDeprecated,
+	}
+	knownTotal := 0
+	for _, s := range knownStatuses {
+		knownTotal += statusCount[s]
+	}
+	otherStatus := len(dag.Nodes) - knownTotal
+	undoDepth, redoDepth := ctx.Store.UndoDepth(), ctx.Store.RedoDepth()
 
 	orchState := dag.Orchestrator.State
 	if dispatchPlan.Status == "QUIESCENT" {
@@ -135,10 +146,15 @@ func runStatus(a *Args, rest []string) *Error {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("[REQBOARD STATUS] %s  @ %s\n", dag.RequirementName, ctx.Root))
 	sb.WriteString(fmt.Sprintf("  Orchestrator: %s (session=%s, max_parallel=%d)\n", orchState, dag.Orchestrator.SessionID, dag.Orchestrator.MaxParallel))
-	sb.WriteString(fmt.Sprintf("  Nodes: %d total | done %d | in_progress %d | pending %d | implemented %d | reviewed %d | proposed %d | deprecated %d\n",
-		len(dag.Nodes), statusCount[model.StatusDone], statusCount[model.StatusInProgress], statusCount[model.StatusPending],
-		statusCount[model.StatusImplemented], statusCount[model.StatusReviewed], statusCount[model.StatusProposed], statusCount[model.StatusDeprecated]))
-	sb.WriteString(fmt.Sprintf("  stale=%d  hold=%d  edges=%d\n", stale, holds, len(dag.Edges)))
+	sb.WriteString(fmt.Sprintf("  Nodes: %d total | done %d | reviewed %d | implemented %d | mocked %d | in_progress %d | changes_requested %d | pending %d | proposed %d | deprecated %d",
+		len(dag.Nodes), statusCount[model.StatusDone], statusCount[model.StatusReviewed], statusCount[model.StatusImplemented],
+		statusCount[model.StatusMocked], statusCount[model.StatusInProgress], statusCount[model.StatusChangesRequested],
+		statusCount[model.StatusPending], statusCount[model.StatusProposed], statusCount[model.StatusDeprecated]))
+	if otherStatus != 0 {
+		sb.WriteString(fmt.Sprintf(" | other %d", otherStatus))
+	}
+	sb.WriteString("\n")
+	sb.WriteString(fmt.Sprintf("  stale=%d  hold=%d  edges=%d  undo=%d  redo=%d\n", stale, holds, len(dag.Edges), undoDepth, redoDepth))
 	sb.WriteString(fmt.Sprintf("  PRD coverage: %.1f%% (%d/%d 段，忽略 %d，红线 %d)，Unmapped %d\n", percent, covered+ignoredN+outN, total, ignoredN, outN, unmappedN))
 	sb.WriteString(fmt.Sprintf("  Diff: attributed=%d orphan=%d to_delete=%d leased=%d broken=%d (changed_files=%d)\n",
 		len(rep.Attributed), len(rep.Orphan), len(rep.ToDelete), len(rep.Leased), len(rep.Broken), rep.ChangedFiles))
@@ -194,6 +210,9 @@ func runStatus(a *Args, rest []string) *Error {
 		"root":             ctx.Root,
 		"requirement_name": dag.RequirementName,
 		"generated_at":     model.Now(),
+		"undo_depth":       undoDepth,
+		"redo_depth":       redoDepth,
+		"status_counts":    statusCount,
 		"config":           cfg,
 		"dag":              dag,
 		"prd": map[string]interface{}{

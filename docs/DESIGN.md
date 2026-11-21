@@ -10,6 +10,7 @@
 | 原则 | 具体落地要求 |
 | :--- | :--- |
 | **功能/规则级拆解** | DAG 节点严格按 **业务功能 & 规则** 拆到最细，而非按仓库/接口/表拆。技术方案改了（如加枚举改拆接口、从 `service` 挪 `business`），DAG 骨架不变，只标 `stale` 并刷新挂载代码。 |
+| **反碎片化** | 多段相关 PRD 锚定到同一个功能点节点（复用 `prd_refs`）；不为纯名词解释、纯复用老逻辑（0 代码改动）或并列枚举拆孤立开发节点；只为“有独立代码增量行为 / 独立验收路径”的规则建节点。DDL / 网关配置 / Feature Flag 挂节点级 `ops` 清单，不新增 DAG 节点。 |
 | **不卡开工，只卡完结** | `mine --> mine` 依赖只卡完结、不卡开工；`external --mocked--> mine` 允许带 Mock 并行。唯一例外是 `external|collaborator --hard--> mine` 且外部未 `done`：该节点进入 `waiting_external`，先等外部就绪或显式改 `mocked`。完结仍受 4 道硬门禁拦截。 |
 | **双向孤儿拦截** | ① **左栏抓 `Unmapped PRD`**：PRD 段落没挂任何节点（含 `out_of_scope`）自动标红，防漏拆；② **右栏抓 `Orphan Diff` & `To-Delete`**：代码改动挂不上合法功能点，或已废弃节点的旧代码没删干净，自动拎出拦截。 |
 | **CLI 即规则注入** | 不依赖数百行易衰减的 Prompt；通过 `reqboard` CLI 的 stdout/stderr 在最新一轮工具调用中**实时注入 PRD 原文切片、禁区列表、人工最新标注与报错纠偏指令**。 |
@@ -95,6 +96,21 @@ flowchart LR
       "stale_reason": "",
       "prd_refs": ["p:3.3.4-2", "p:3.3.4-3"],
       "tags": ["多仓", "需 feature flag"],
+      "ops": [
+        {
+          "id": "op-01",
+          "kind": "ddl",
+          "title": "新增订单可见性索引",
+          "done": false,
+          "note": "上线前在订单库执行"
+        },
+        {
+          "id": "op-02",
+          "kind": "flag",
+          "title": "order_visibility_v2 开关",
+          "done": true
+        }
+      ],
       "self_mocks": [],
       "review_notes": [
         {
@@ -155,6 +171,9 @@ flowchart LR
   * `external`：外部联调方依赖（如 AuthService / PaymentGateway / 合同），**禁止 Agent 修改代码**，用作上游依赖与 Mock 边起点。
   * `out_of_scope`：PRD 明确不在本期范围的红线项（如退订/退款），**硬拦截任何 `claim`/`bind`**，专门防止 AI 脑补。
 * **短哈希 ID**：采用 4~6 位确定性短哈希（如 `rb-7a2c`），多 Agent 并发 `propose` 不撞车。
+* **节点级 `ops` 清单**：每项 `{ id, kind: "ddl"|"gateway"|"flag"|"other", title, done, note }`。它是节点内的轻量交付清单，用于 DDL / 网关配置 / Feature Flag 等不构成独立功能点的动作，**不污染 DAG 节点数**；看板节点卡片、右栏与顶栏 `Ops 清单 (done/total)` 胶囊共同读写。
+* **误建节点删除**：`reqboard node delete <id>` 直接删除节点与关联边；若仍有 `bindings` 则默认拒绝并提示改用 `deprecate`（保留 To-Delete 残骸追踪），确认误建后加 `--force` 连同 bindings 删除。
+* **撤销 / 重做**：每次写 `dag.json` / `bindings.json` / `config.json` 前自动把前态快照写入 `.reqboard/.undo/`（最多 20 步）；`undo` / `redo` 在 `flock` 内原子完成，`status --json` 返回 `undo_depth` / `redo_depth`。`reqboard init` 生成 `.reqboard/.gitignore` 忽略 `.undo/` 与 `.lock`，避免快照被当成代码改动。
 
 ### 3.3 `bindings.json`（多仓代码归因 + 并发软租约）
 
@@ -207,6 +226,7 @@ flowchart LR
 * 记录当前 worktree 包含的子仓库列表、各仓独立 `base_ref`（默认自动继承 `focused-git` 的 per-repo base 配置，未配置则回退 `origin/master`）。
 * 配置**自动忽略/折叠的生成代码 glob**（默认：`**/*_mock.go`, `**/mock_*.go`, `**/*_gen.go`, `**/gen/**`, `go.sum`, `**/*.pb.go`），避免改 1 行 `.thrift` 引发几千行 `Orphan Diff` 噪声。
 * 默认排除单测文件（`**/*_test.go`、`**/*.test.ts`、`**/*.spec.js`、`**/test_*.py` 等）；`exclude_tests: false` 可关闭，`include_globs` 非空时只审计命中路径（支持 `repo:path`）。
+* **显式 bind 豁免默认噪声过滤**：某文件被显式 `bind`（`role: "mock"` 或 `"impl"`）后，不再被默认 `**/*_mock.go` / `**/mock_*.go` 吞掉，保证手写业务 mock 在看板可见、可拆弹；显式绑定的测试文件同样豁免 `exclude_tests`。未显式 bind 的测试/生成文件仍按默认规则排除。用户自定义 ignore glob 与 include allow-list 仍然生效。
 * 过滤规则通过 `reqboard filter show|set` 维护，`status --json` / `check --json` 会回显当前生效的 `filter` 供看板展示与回填。
 
 ---
@@ -272,7 +292,10 @@ CLI 是 coding agent 操作看板的唯一入口（建议用 Go 或 Node/TS 编�
 | **`plan import`** | `reqboard plan import plan.json` | 校验 DAG 无环、无悬空边、每个业务叶子节点均有合法 `prd_refs`；输出 PRD 覆盖率报告。 |
 | **`dispatch`** | `reqboard dispatch --max-parallel 4` | **Goal Orchestrator 核心调度原语**：确定性计算当前可并发推进的节点队列（按 P0 修复/残骸 → P1 左侧优先开发 → P2 闭环快审排序，自动规避租约冲突与熔断节点）；`external|collaborator --hard--> mine` 且外部未 done 的节点不进入 P1，归入 `waiting_external`；无可推进项时返回 `QUIESCENT` 与分类阻塞清单。 |
 | **`claim`** | `reqboard claim rb-7a2c --lease "order_query:src/esdao/**"` | ① 若目标为 `out_of_scope`/`external`/`proposed`/`hold`，**直接拒绝并报错**；② 成功时打印：**锚定 PRD 原文全文 + 关联 `out_of_scope` 红线 + 所有入边状态及 `mocked` 人工备注 + 未解决的 `review_notes` + `[人工最新调整]` 变更提示**。 |
-| **`bind`** | `reqboard bind rb-7a2c --repo order_query --file ... --symbol ... [--partial "..."] [--role impl\|mock\|test] --why "..."` | 写入 `bindings.json`；若 `--why` 为空或符号在当前文件不存在，**报错并提示真实可选符号名**。 |
+| **`bind`** | `reqboard bind rb-7a2c --repo order_query --file ... --symbol ... [--partial "..."] [--role impl\|mock\|test] --why "..."`<br>`reqboard bind rb-7a2c --repo order_query --file ... --all-symbols [--keep-status] --why "..."` | 写入 `bindings.json`；若 `--why` 为空或符号在当前文件不存在，**报错并提示真实可选符号名**。`--all-symbols` 扫描该文件相对 base 的全部改动符号并一次绑定，减少大仓库逐符号调用；`--keep-status` 仅登记代码，不把 `pending` 隐式改为 `in_progress`。 |
+| **`ops`** | `reqboard ops add <node_id> --kind ddl\|gateway\|flag\|other --title "..." [--note "..."]`<br>`reqboard ops toggle\|remove <node_id> <op_id>` | 维护节点级轻量交付清单，不新增 DAG 节点；看板节点卡片、右栏与顶栏胶囊共用。 |
+| **`node delete`** | `reqboard node delete <id> [--force]` | 删除误建节点及关联边。无 bindings 直接删；有 bindings 时默认拒绝并提示 `deprecate` 或 `--force`；`--force` 连同 bindings 与关联边一并删除。 |
+| **`undo / redo`** | `reqboard undo` / `reqboard redo` | 在 `.reqboard/.undo/` 最多 20 步前态快照间回滚/恢复；写操作前自动快照，`status --json` 返回 `undo_depth` / `redo_depth`。 |
 | **`propose`** | `reqboard propose --from rb-7a2c --prd-ref p:3.5-1 --title "..." --reason "..."` | 在 DAG 创建虚线 `proposed` 节点并连 `discovered` 边；输出明确指令：**“节点已提交待 owner 审批，请勿在审批前修改该部分代码”**。 |
 | **`mock`** | `reqboard mock add/resolve rb-7a2c --desc "..." [--edge ed-4e8a]` | 显式登记或销账节点/边上的 Mock 债。 |
 | **`filter`** | `reqboard filter show --json` / `reqboard filter set --include "src/**, *.go" --exclude "vendor/**" --exclude-tests=true` | 读写 `.reqboard/config.json` 的 Diff 过滤规则（单测排除、Include / Exclude glob），并追加 `events.jsonl`；CLI 与 VS Code 右栏共用。 |
@@ -298,7 +321,7 @@ CLI 是 coding agent 操作看板的唯一入口（建议用 Go 或 Node/TS 编�
 
 为了不依赖脆弱的行号匹配，同时兼顾速度与准确度，对账引擎采用**“Git Diff Hunk 抽取 + Go AST 符号归属”**两步法：
 
-1. **抽取真实改动范围**：遍历 `config.json` 中每个子仓，执行 `git diff --unified=0 <base_ref>`（含未暂存与工作区改动 + 未追踪新文件），过滤掉配置的生成文件 glob（`**/gen/**` 等），得到每个改动文件的变更行区间集合。
+1. **抽取真实改动范围（三点语义）**：遍历 `config.json` 中每个子仓，先执行 `git merge-base <base_ref> HEAD` 求共同祖先 SHA，再执行 `git diff --unified=0 <merge_base>`（含已提交分支改动 + 未暂存与工作区改动 + 未追踪新文件）；`merge-base` 失败时优雅回退原 `<base_ref>`。这样 base 分支领先开发分支时，其新提交不会被误报为反向删除。随后过滤掉配置的生成文件 glob（`**/gen/**` 等），得到每个改动文件的变更行区间集合。
 2. **映射到符号（Symbol）**：
    * 对 `.go` 文件：用 Go 标准库 `go/parser`（或轻量化 AST 脚本）解析顶层声明（`func` / `method` / `type` / `const` / `var` 块）的起止行号，把 diff 变更行区间精准投影到**具体被改动的符号列表**；
    * 对 `.thrift` / `.yaml` / 非 Go 文件：按文件级或正则块级（`struct` / `service` / `enum`）投影。
@@ -358,9 +381,9 @@ CLI 是 coding agent 操作看板的唯一入口（建议用 Go 或 Node/TS 编�
 
 | 区域 | 承载内容 | 核心高频人类交互（全部直写 `.reqboard/`） |
 | :--- | :--- | :--- |
-| **顶部状态条** | Goal Orchestrator 实时运行态 | • 显示 `Running (3 workers active)` / `Quiescent (待人工介入 N 项)`；<br>• 一键复制 `/goal` 启动命令或通过可配置的 session link（`reqboard.sessionLinkTemplate`）直达主 Orchestrator session。 |
+| **顶部状态条** | Goal Orchestrator 实时运行态 | • 显示 `Running (3 workers active)` / `Quiescent (待人工介入 N 项)`；<br>• `[↩ 撤销 (N)]` / `[↪ 重做 (N)]` 显示可用步数，绑定 `Ctrl+Z` / `Cmd+Z` 与 `Ctrl+Shift+Z` / `Cmd+Shift+Z`（输入框聚焦时不拦截浏览器原生撤销）；<br>• `Ops 清单 (done/total)` 折叠胶囊汇总全需求未完成的 DDL / 网关配置 / Feature Flag，支持直接勾选与跳转所属节点；<br>• 一键复制 `/goal` 启动命令或通过可配置的 session link（`reqboard.sessionLinkTemplate`）直达主 Orchestrator session。 |
 | **左栏（PRD 原文）** | Webview 渲染 `prd.md` | • 段落左侧彩色覆盖条（已覆盖绿 / `out_of_scope` 灰 / **`Unmapped PRD` 浅红**）；<br>• 划选任意段落右键 → **“一键新建 DAG 节点并锚定”** 或 **“标为背景忽略”**；<br>• 点击任意段落 → 中栏高亮对应节点；点击中栏节点 → 左栏自动滚动高亮原文。 |
-| **中栏（DAG 画布）** | Webview（原生 SVG/DOM + `reqboard layout` 左到右分层） | • 主画布默认只渲染我方主干（`mine` / `proposed`）；上方 **External Dock** 聚合 `external` / `collaborator`，`out_of_scope` 收进红线胶囊；<br>• **左细右粗**自动分层，支持自由拖拽微调坐标；<br>• 双击空白建节点、拖锚点连边、点击节点/边原地改状态、写备注、或勾选 `hold` 暂停自动推进；<br>• 橙色虚线（`mocked`）与节点上的外部依赖小胶囊；点击切回实线自动触发下游 `stale`；<br>• 悬停/点击外部卡片联动高亮依赖它的我方节点，反之点击节点高亮 Dock 卡片；<br>• 虚线 `proposed` 节点卡片直接带 **`[批准]` / `[驳回]`** 按钮；<br>• 正在被 Worker 跑的节点带动态运行徽标，卡片显示 `scope`、`status`、跨仓 `+add/-del`、可配置的 session link 跳转链接。 |
+| **中栏（DAG 画布）** | Webview（原生 SVG/DOM + `reqboard layout` 左到右分层） | • 主画布默认只渲染我方主干（`mine` / `proposed`）；上方 **External Dock** 聚合 `external` / `collaborator`，`out_of_scope` 收进红线胶囊；<br>• 勾选「画布含外部」后，`board.js` 与 `reqboard layout --include-external` 把 `external` / `collaborator` 排到最左 Column 0 源头列，自然融入左到右拓扑；<br>• **左细右粗**自动分层，支持自由拖拽微调坐标；<br>• 节点卡片底部显示紧凑 `ops` 徽标（未完橙色 `DDL` / `Flag`，已完绿色 `✓DDL`）；<br>• 双击空白建节点、拖锚点连边、点击节点/边原地改状态、写备注、或勾选 `hold` 暂停自动推进；<br>• 节点编辑弹层与右栏提供 `[删除]`；无绑定直接删，有绑定弹窗区分「标为废弃」与「强制删除」；选中画布节点且非输入态按 `Delete` / `Backspace` 快捷删除，误删可 `Ctrl+Z` 一键还原；<br>• 橙色虚线（`mocked`）与节点上的外部依赖小胶囊；点击切回实线自动触发下游 `stale`；<br>• 悬停/点击外部卡片联动高亮依赖它的我方节点，反之点击节点高亮 Dock 卡片；<br>• 虚线 `proposed` 节点卡片直接带 **`[批准]` / `[驳回]`** 按钮；<br>• 正在被 Worker 跑的节点带动态运行徽标，卡片显示 `scope`、`status`、跨仓 `+add/-del`、可配置的 session link 跳转链接。 |
 | **右栏（按节点过滤 Diff）** | Webview 侧栏或 VS Code TreeView + 原生 Diff 编辑器 | • 顶部常驻两个警戒桶：**`[Orphan Diff (N)]`** 和 **`[To-Delete 残骸 (M)]`**；<br>• 选中任意节点 → 仅列出该节点挂载的多仓文件与符号（附带 `--why` 理由）；<br>• 点击文件/符号 → 直接调用 **`vscode.commands.executeCommand('focusedGit.openFileComparison', uri)`** 并定位到对应符号行，在熟悉的多仓 Diff 视图里继续 `diff 跳 diff` 和 `Ctrl+-` 返回；<br>• 节点卡片内置 **`[Reviewed 通过]`** 和 **`[打回 + 写批注]`**，直接写入 `review_notes` 供下一波 Orchestrator 自动派发修复。 |
 
 ### 8.2 人机并发防踩踏机制

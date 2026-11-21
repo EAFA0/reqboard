@@ -33,6 +33,9 @@ export function renderHTML(webview: vscode.Webview, extensionUri: vscode.Uri): s
   </div>
   <div id="top-stats" class="stats"></div>
   <div class="top-actions">
+    <button id="btn-undo" title="撤销上一次写操作（Ctrl+Z / Cmd+Z）">↩ 撤销 (0)</button>
+    <button id="btn-redo" title="重做被撤销的操作（Ctrl+Shift+Z / Cmd+Shift+Z）">↪ 重做 (0)</button>
+    <button id="btn-ops" class="ops-capsule" title="展开全需求 Ops 清单（DDL / 网关配置 / Feature Flag）">Ops 清单 (0/0)</button>
     <button id="btn-ext-canvas" title="切换主画布是否显示 external / collaborator / out_of_scope 节点">画布含外部</button>
     <button id="btn-refresh" title="重新执行 status 与多仓 git diff">刷新 Diff</button>
     <button id="btn-fit" title="缩放以完整显示 DAG">适应画布</button>
@@ -41,6 +44,7 @@ export function renderHTML(webview: vscode.Webview, extensionUri: vscode.Uri): s
     <button id="btn-orch" title="打开 Orchestrator session">跳回 Orchestrator Session</button>
   </div>
 </header>
+<div id="ops-panel" class="ops-panel hidden"></div>
 <main id="columns">
   <section id="prd-pane" class="pane">
     <div class="pane-head">
