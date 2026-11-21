@@ -103,6 +103,7 @@ func runDone(a *Args, rest []string) *Error {
 		if err := ctx.SaveDAG(dag, "done", id, strings.Join(evidence, "; ")); err != nil {
 			return err
 		}
+		releaseNodeLeases(ctx, id, "done")
 		if len(switched) > 0 {
 			_ = ctx.Store.AppendEvent(ctx.event("external.unmock_downstream", id,
 				fmt.Sprintf("edges=%s stale=%s", strings.Join(switched, ","), strings.Join(stale, ","))))
@@ -153,6 +154,23 @@ func runDone(a *Args, rest []string) *Error {
 		})
 		return nil
 	})
+}
+
+// releaseNodeLeases drops active leases for a node once it leaves in_progress
+// (done / implemented / mocked / reviewed / pending / fail) so finished or
+// failed workers never block subsequent dispatch waves or mask Orphan Diffs.
+func releaseNodeLeases(ctx *Ctx, id, trigger string) {
+	bindings, err := ctx.Store.LoadBindings()
+	if err != nil || bindings == nil {
+		return
+	}
+	before := len(bindings.Leases)
+	bindings.RemoveLeases(id)
+	if len(bindings.Leases) == before {
+		return
+	}
+	_ = ctx.Store.SaveBindings(bindings)
+	_ = ctx.Store.AppendEvent(ctx.event("lease.release", id, trigger))
 }
 
 func allUpstreamDone(dag *model.DAG, id string) bool {

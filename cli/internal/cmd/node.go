@@ -279,6 +279,9 @@ func nodeUpdate(a *Args, id string) *Error {
 		if err := ctx.SaveDAG(dag, "node.update", id, strings.Join(changed, ", ")); err != nil {
 			return err
 		}
+		if n.Status != model.StatusInProgress {
+			releaseNodeLeases(ctx, id, "node.update")
+		}
 		if len(switched) > 0 {
 			_ = ctx.Store.AppendEvent(ctx.event("external.unmock_downstream", id,
 				fmt.Sprintf("edges=%s stale=%s", strings.Join(switched, ","), strings.Join(stale, ","))))
@@ -582,6 +585,7 @@ func nodeFail(a *Args, id string) *Error {
 		if err := ctx.SaveDAG(dag, "node.fail", id, msg); err != nil {
 			return err
 		}
+		releaseNodeLeases(ctx, id, "node.fail")
 		var sb strings.Builder
 		sb.WriteString(fmt.Sprintf("[REQBOARD NODE FAIL] %s attempts=%d\n", id, n.Attempts))
 		if n.Attempts >= 2 {

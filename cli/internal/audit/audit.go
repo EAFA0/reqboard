@@ -487,8 +487,8 @@ func classify(e *Entry, dag *model.DAG, bindings *model.Bindings, scopeNode *mod
 		if scopeNode != nil && l.NodeID == scopeNode.ID {
 			continue // own lease + unbound diff = orphan for this node
 		}
-		if ln := dag.Node(l.NodeID); ln == nil || ln.Status == model.StatusDone || ln.Status == model.StatusDeprecated {
-			continue // finished/dead leases must not hide orphan diffs
+		if ln := dag.Node(l.NodeID); ln == nil || ln.Status != model.StatusInProgress {
+			continue // only active in_progress workers hold valid leases
 		}
 		for _, p := range l.Patterns {
 			if leaseMatches(p, e.Repo, e.File) {

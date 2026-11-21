@@ -64,11 +64,20 @@ func TestLeaseMutex(t *testing.T) {
 		t.Fatal("defer reason missing")
 	}
 
-	// An active lease from another node blocks both.
+	// An active in_progress lease from another node blocks both.
+	other := testutil.AddNode(d, "rb-other", "Other", model.ScopeMine, model.StatusInProgress)
 	b.Leases = []model.Lease{{NodeID: "rb-other", SessionID: "s-other", Patterns: []string{"api:svc/**"}}}
 	p = Compute(d, b, &audit.Report{}, Options{MaxParallel: 4})
 	if len(p.Items) != 0 || len(p.Deferred) != 2 {
 		t.Fatalf("active lease should defer all: items=%+v deferred=%+v", p.Items, p.Deferred)
+	}
+
+	// Once the lease owner leaves in_progress (e.g. implemented), any stale
+	// lease is ignored so waiting nodes unblock automatically.
+	other.Status = model.StatusImplemented
+	p = Compute(d, b, &audit.Report{}, Options{MaxParallel: 4})
+	if len(p.Items) != 1 {
+		t.Fatalf("stale lease from implemented node should not block dispatch: items=%+v deferred=%+v", p.Items, p.Deferred)
 	}
 }
 

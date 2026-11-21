@@ -43,16 +43,17 @@ description: 多仓复杂需求的本地控制面：主 PRD + 补充来源锚点
 禁止 Orchestrator 亲自改业务代码，也禁止绕过 dispatch 自行猜测下一步。
 
 ### Node Worker（单节点，短上下文）
-`claim → 读注入 → 改码/单测 → bind → check --node → 回报`
+`claim → 读注入 → 改码/包内单测 → bind → check --node → 更新状态/done → 回报`
 1. `reqboard claim <id> --session <sid> --lease <repo:glob>`
    - 拒绝 `out_of_scope`/`external`/`proposed`/`hold`；注入 PRD 原文、红线、mocked 备注、批注与人工调整。
    - 自动追加节点引用的补充来源段落原文（标注 `[补充依据 — 与主 PRD 口径冲突时优先采用]`）以及 `refs` 的类型/标题/URL/原话摘录；冲突时以补充依据和最新人工调整优先。
 2. 只改锚定 PRD 覆盖的行为；每处生产改动必须挂载（**默认全局排除单测，只需 `bind` 生产 `impl` 与手写 `mock`，无需绑定 `*_test.go`**）：
    `reqboard bind <id> --repo <r> --file <f> --symbol <s> --role impl|mock --why "..."`
    - 大文件多符号一次挂载：`reqboard bind <id> --repo <r> --file <f> --all-symbols --why "..." [--keep-status]`。
+   - **并发单测隔离**：多 Worker 并发改同一仓库时，Worker 只跑自己改动包的单测（如 `go test ./<pkg>/...`），不要跑全仓 `go test ./...` 避免被同仓其他未写完的 Worker 编挂；整波回收后再由 Orchestrator 跑全仓编译与提交。
    - 手写业务 mock（如 `mock_provider.go`）显式 `--role mock` 后不会被默认 `**/*_mock.go` / `**/mock_*.go` 吞掉。
 3. 自检：`reqboard check --node <id>` 必须无 Orphan/Broken/To-Delete。
-4. 完结：`reqboard done <id> --evidence ...`；失败按输出的纠偏命令处理，禁止硬标 done。
+4. 交差/完结：能过门禁则 `reqboard done <id> --evidence ...`；若被上游/mock 暂卡完结门禁，则显式 `reqboard node update <id> --status implemented`（或 `mocked`）以**自动释放包租约**；遇阻失败调用 `reqboard node fail <id> --error "..."`（自动释放租约并计入熔断）。
 5. 发现遗漏/越界：`reqboard propose --from <id> --prd-ref <p:x> --title ... --reason ...`，审批前不要改。
 
 ## 关键语义

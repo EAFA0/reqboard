@@ -246,7 +246,7 @@ func Compute(dag *model.DAG, bindings *model.Bindings, rep *audit.Report, opts O
 	// Lease-aware selection.
 	activeKeys := map[string]string{}
 	for _, l := range bindings.Leases {
-		if ln := dag.Node(l.NodeID); ln != nil && (ln.Status == model.StatusDone || ln.Status == model.StatusDeprecated) {
+		if ln := dag.Node(l.NodeID); ln == nil || ln.Status != model.StatusInProgress {
 			continue
 		}
 		for _, ptn := range l.Patterns {
