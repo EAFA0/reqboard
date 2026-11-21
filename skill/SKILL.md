@@ -1,6 +1,6 @@
 ---
 name: reqboard
-description: 多仓复杂需求的本地控制面：主 PRD + 补充来源锚点、节点级拍板 refs、功能级 DAG、AST Diff 归因、完结硬门禁与 /goal 自动调度。用户提到 ReqBoard、Orphan Diff、To-Delete、reqboard、补充来源/会议纪要/拍板摘录，或要让一个 /goal 协调者持续推进需求时使用。
+description: 需求开发的本地控制面（支持单仓与多仓）：主 PRD + 补充来源锚点、节点级拍板 refs、功能级 DAG、AST Diff 归因、完结硬门禁与 /goal 自动调度。用户推进需求开发、建工作区、或提到 ReqBoard、Orphan Diff、To-Delete、reqboard、补充来源/会议纪要/拍板摘录，或要让一个 /goal 协调者持续推进需求时使用。
 ---
 
 # ReqBoard
