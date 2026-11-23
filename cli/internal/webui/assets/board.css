@@ -411,6 +411,18 @@ textarea:focus {
   stroke-width: 2;
   pointer-events: stroke;
   cursor: pointer;
+  transition: opacity 150ms ease, stroke-width 150ms ease;
+}
+
+#dag-edges path.edge.edge-dimmed {
+  opacity: 0.1;
+  stroke-width: 1.5;
+}
+
+#dag-edges path.edge.edge-highlighted {
+  opacity: 1;
+  stroke-width: 3;
+  filter: drop-shadow(0 0 3px currentColor);
 }
 
 #dag-edges path.edge.hard {
@@ -440,6 +452,11 @@ textarea:focus {
 
 #dag-edges .mock-pill {
   pointer-events: none;
+  transition: opacity 150ms ease;
+}
+
+#dag-edges .mock-pill.edge-dimmed {
+  opacity: 0.12;
 }
 
 #dag-edges .mock-pill rect {
@@ -485,7 +502,10 @@ textarea:focus {
 }
 
 .dag-node.selected {
-  outline: 2px solid var(--rb-accent);
+  border-color: var(--rb-blue);
+  outline: 2px solid var(--rb-blue);
+  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.45), 0 0 18px rgba(88, 166, 255, 0.45);
+  z-index: 4;
 }
 
 .dag-node.proposed {
@@ -1083,10 +1103,22 @@ textarea:focus {
   border-style: dashed;
 }
 
-.dag-node.ext-linked {
+.dag-node.ext-linked,
+.dag-node.neighbor-linked {
   border-color: var(--rb-orange);
   box-shadow: 0 0 0 2px var(--rb-orange), 0 0 18px rgba(210, 153, 34, 0.55);
   z-index: 2;
+}
+
+.dag-node.selected {
+  border-color: var(--rb-blue);
+  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.55), 0 0 18px rgba(88, 166, 255, 0.5);
+  z-index: 4;
+}
+
+.dock-card.active-self {
+  border-color: var(--rb-blue);
+  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.75), 0 0 12px rgba(88, 166, 255, 0.35);
 }
 
 .dag-node.dimmed {

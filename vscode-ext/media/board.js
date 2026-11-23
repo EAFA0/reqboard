@@ -939,12 +939,12 @@
       const y2 = to.y + NODE_H / 2;
       const dx = Math.max(40, Math.abs(x2 - x1) / 2);
       const d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
-      parts.push(`<path class="edge ${esc(e.kind)}" d="${d}"><title>${esc(`${e.from} → ${e.to} [${e.kind}] ${e.note || ''}`)}</title></path>`);
+      parts.push(`<path class="edge ${esc(e.kind)}" data-from="${esc(e.from)}" data-to="${esc(e.to)}" d="${d}"><title>${esc(`${e.from} → ${e.to} [${e.kind}] ${e.note || ''}`)}</title></path>`);
       parts.push(`<path class="edge-hit" d="${d}" data-edge="${esc(e.id)}"><title>${esc(`${e.from} → ${e.to} [${e.kind}] ${e.note || ''}`)}</title></path>`);
       if (e.kind === 'mocked') {
         const mx = (x1 + x2) / 2;
         const my = (y1 + y2) / 2;
-        parts.push(`<g class="mock-pill"><rect x="${mx - 22}" y="${my - 9}" width="44" height="18" rx="9"></rect><text x="${mx}" y="${my + 4}" text-anchor="middle">mock</text></g>`);
+        parts.push(`<g class="mock-pill" data-from="${esc(e.from)}" data-to="${esc(e.to)}"><rect x="${mx - 22}" y="${my - 9}" width="44" height="18" rx="9"></rect><text x="${mx}" y="${my + 4}" text-anchor="middle">mock</text></g>`);
       }
     }
     if (state.connect) {
@@ -1323,7 +1323,7 @@
     state.anchorLinkedNodes = [];
     state.anchorBarClosed = false;
     for (const el of document.querySelectorAll('.dag-node')) {
-      el.classList.remove('selected', 'anchor-linked', 'ext-linked', 'dimmed');
+      el.classList.remove('selected', 'anchor-linked', 'ext-linked', 'neighbor-linked', 'dimmed');
     }
     highlightPRD();
     applyExternalHighlight();
@@ -1532,15 +1532,50 @@
         anchorOnCanvas = true;
       }
     }
-    const focus = !!active || anchorOnCanvas || anchorExternal;
+    const sel = findNode(state.selectedNode);
+    const selOnCanvas = !!(sel && isCanvasNodeId(sel.id));
+    const neighbors = new Set();
+    if (selOnCanvas && !active) {
+      for (const e of allEdges()) {
+        if (e.from === sel.id) {
+          neighbors.add(e.to);
+        } else if (e.to === sel.id) {
+          neighbors.add(e.from);
+        }
+      }
+    }
+    const focus = !!active || anchorOnCanvas || anchorExternal || selOnCanvas;
     for (const el of document.querySelectorAll('.dag-node')) {
       const id = el.dataset.node;
-      const on = linked.has(id);
-      el.classList.toggle('ext-linked', on);
-      el.classList.toggle('anchor-linked', anchorSet.has(id));
-      el.classList.toggle('dimmed', focus && !on && !anchorSet.has(id) && id !== active);
+      const onExt = linked.has(id);
+      const onAnchor = anchorSet.has(id);
+      const isSel = selOnCanvas && id === sel.id && !active;
+      const onNeighbor = !active && neighbors.has(id) && !isSel && !onAnchor;
+      el.classList.toggle('ext-linked', onExt);
+      el.classList.toggle('neighbor-linked', onNeighbor);
+      el.classList.toggle('anchor-linked', onAnchor);
+      el.classList.toggle('dimmed', focus && !onExt && !onAnchor && !isSel && !onNeighbor && id !== active);
     }
-    const sel = findNode(state.selectedNode);
+    for (const el of document.querySelectorAll('#dag-edges path.edge, #dag-edges .mock-pill')) {
+      if (!focus) {
+        el.classList.remove('edge-highlighted', 'edge-dimmed');
+        continue;
+      }
+      const from = el.dataset.from;
+      const to = el.dataset.to;
+      let hi = false;
+      if (active) {
+        hi = from === active || to === active || (linked.has(from) && linked.has(to));
+      } else if (selOnCanvas) {
+        hi = from === sel.id || to === sel.id;
+      } else if (anchorOnCanvas) {
+        hi = anchorSet.has(from) || anchorSet.has(to);
+      } else if (anchorExternal) {
+        hi = linked.has(from) && linked.has(to);
+      }
+      el.classList.toggle('edge-highlighted', hi);
+      el.classList.toggle('edge-dimmed', !hi);
+    }
     const selExt = new Set();
     if (sel) {
       for (const e of prerequisiteInEdges(sel.id)) {
@@ -1549,6 +1584,7 @@
     }
     for (const el of document.querySelectorAll('.dock-card')) {
       const id = el.dataset.extId;
+      el.classList.toggle('active-self', id === active);
       el.classList.toggle('linked', id === active || selExt.has(id));
       el.classList.toggle('anchor-linked', anchorSet.has(id));
     }

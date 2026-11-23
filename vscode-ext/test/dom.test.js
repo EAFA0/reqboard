@@ -921,6 +921,21 @@ test('top prerequisite dock sorts unfinished nodes before done nodes', () => {
   assert.ok(pendingIdx < doneIdx, 'unfinished prerequisite should appear before done: ' + JSON.stringify(ids));
 });
 
+test('selecting a canvas node highlights it in blue, neighbors in amber, and dims unrelated nodes/edges', () => {
+  const snap = wideSnapshot();
+  snap.dag.nodes.push({ id: 'rb-far2', title: '远端节点2', scope: 'mine', status: 'pending', position: { x: 4500, y: 440 } });
+  snap.dag.edges.push({ id: 'e-far', from: 'rb-far', to: 'rb-far2', kind: 'hard' });
+  const { document, window } = boot(snap);
+  click(window, document.querySelector('.dag-node[data-node="rb-a"]'));
+  assert.ok(document.querySelector('.dag-node[data-node="rb-a"]').classList.contains('selected'));
+  assert.ok(document.querySelector('.dag-node[data-node="rb-b"]').classList.contains('neighbor-linked'));
+  assert.ok(document.querySelector('.dag-node[data-node="rb-far"]').classList.contains('dimmed'));
+  const incident = document.querySelector('#dag-edges path.edge[data-from="rb-a"][data-to="rb-b"]');
+  const unrelated = document.querySelector('#dag-edges path.edge[data-from="rb-far"][data-to="rb-far2"]');
+  assert.ok(incident && incident.classList.contains('edge-highlighted'), 'incident edge should be highlighted');
+  assert.ok(unrelated && unrelated.classList.contains('edge-dimmed'), 'unrelated edge should be dimmed');
+});
+
 (async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   // 1. Hovering a dock card peeks (zooms & centers), leaving restores original view.
