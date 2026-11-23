@@ -27,15 +27,10 @@ description: 需求开发的本地控制面（支持单仓与多仓）：主 PRD
 2. **强模型出初版 `plan.json`**：按反碎片化准则拆解，禁止把“保持现状/正常获取”类不变式声明拆成待开发节点。
 3. **独立 Critic Review 纠错**：`plan import` 前换独立无偏见视角（优先异构强模型）对照 `[prd.md + 现状 + plan.json]` 专查 4 类缺陷并修正：① 假增量节点（0 改动复用项）；② 假外部依赖/假 Mock（已有能力被误当新联调）；③ 无意义连线；④ 漏拆真实增量与评论区边界。
 
-**反碎片化与连边准则（硬要求）**：
-- 多段相关 PRD 锚定到**同一个功能点节点**（复用 `prd_refs`），不要一段一节点。
-- 不为纯名词解释、纯复用老逻辑（0 代码改动）、并列枚举拆孤立开发节点。
-- 只为“有独立代码增量行为 / 独立验收路径”的规则建节点。
-- **严禁凑树形假依赖边与 PRD 兜底节点**：只有满足“**`A` 未 `done` 时，`B` 在业务或技术上就无法独立验收/完结**”才允许连 `hard`/`mocked` 边；同一 PRD 章节里并列的兄弟功能点严禁互相串连，也**严禁**为了凑 `100% 覆盖率` 建不写代码的“闭环/总验收/回归兜底”类 `mine` 汇点节点把难归类的段落全塞进去。
-- **`mine` 节点只承载真实生产代码增量，诚实使用 `prd ignore`**：纯背景介绍、Demo 链接、存量不变式说明必须执行 `reqboard prd ignore`（附理由），纯其他端交互段落只挂 `collab`，端到端联调检查项用 `todo`（不占 `mine` 代码门禁）。
-- 外部依赖、协作者与跨节点工程 TODO 是一等前置节点（`external` / `collaborator` / `todo`），不进入主画布业务网格：
-  `reqboard todo add "<title>" --kind ddl|gateway|flag|other --blocks <n1,n2,...> [--note "..."]`。
-- 仅影响单个节点的历史 `ops` 清单继续兼容：`reqboard ops add <node_id> --kind ... --title "..."`；跨节点 1→N 阻塞请用 `todo`。
+**高质量 DAG 最佳实践**：
+- **节点粒度**：每个 `mine` 节点对应一块真实的生产代码增量与 AST Diff 绑定，相关 PRD 段落聚合到同一节点（复用 `prd_refs`）；纯背景/Demo/存量不变式诚实执行 `reqboard prd ignore`（附理由），他端交互归 `collab`，端到端联调检查用 `todo`（不建无代码绑定的汇总/兜底 `mine` 节点）。
+- **节点描述与边备注**：`description` 用 2~3 条分行短句写清「做什么 / 卡在哪 / 怎么验收」（≤ 120 字，用相对路径或符号名，给人一眼扫完）；边只在“A 未完成则 B 无法独立验收”时建，边 `note` 默认留空（仅同源不同因或 `mocked` 边写 ≤ 15 字短语，如临时 stub 方案）。
+- **前置与 Ops**：外部依赖、协作者与跨节点工程 TODO 是一等前置节点（`external` / `collaborator` / `todo`），不进入主画布业务网格：`reqboard todo add "<title>" --kind ddl|gateway|flag|other --blocks <n1,n2,...>`；单节点部署/DDL 项用 `reqboard ops add`。
 
 ### Goal Orchestrator（`/goal`，只调度不写码）
 循环直到 `QUIESCENT`：

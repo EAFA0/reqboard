@@ -1939,7 +1939,25 @@
       <div><b>${esc(selected.title)}</b> <span class="badge">${esc(selected.id)}</span></div>
       <div class="prd-refs">${(selected.prd_refs || []).map((r) => `<span class="prd-ref" data-prd-ref="${esc(r)}">@${esc(r)}</span>`).join('') || '<span class="muted">无 PRD 锚点</span>'}</div>`;
     if (selected.description) {
-      html += `<div class="why">${esc(selected.description)}</div>`;
+      html += `<div class="why node-desc">${esc(selected.description)}</div>`;
+    }
+    const inEdges = allEdges().filter((e) => e.to === selected.id);
+    const outEdges = allEdges().filter((e) => e.from === selected.id);
+    if (inEdges.length || outEdges.length) {
+      const rows = [];
+      for (const e of inEdges) {
+        const peer = findNode(e.from);
+        const title = peer ? peer.title : e.from;
+        const tip = e.note ? `上游依赖：${title} — ${e.note}` : `上游依赖：${title}`;
+        rows.push(`<button class="node-link-btn" data-jump-node="${esc(e.from)}" title="${esc(tip)}"><span class="node-link-dir">←</span><span class="node-link-title">${esc(title)}</span>${e.kind === 'mocked' ? '<span class="node-link-kind">mock</span>' : ''}${e.note ? `<span class="node-link-note">· ${esc(e.note)}</span>` : ''}</button>`);
+      }
+      for (const e of outEdges) {
+        const peer = findNode(e.to);
+        const title = peer ? peer.title : e.to;
+        const tip = e.note ? `下游影响：${title} — ${e.note}` : `下游影响：${title}`;
+        rows.push(`<button class="node-link-btn" data-jump-node="${esc(e.to)}" title="${esc(tip)}"><span class="node-link-dir">→</span><span class="node-link-title">${esc(title)}</span>${e.kind === 'mocked' ? '<span class="node-link-kind">mock</span>' : ''}${e.note ? `<span class="node-link-note">· ${esc(e.note)}</span>` : ''}</button>`);
+      }
+      html += `<div class="section-title">上下游关联 (${inEdges.length} 入 / ${outEdges.length} 出)</div><div class="node-links-list">${rows.join('')}</div>`;
     }
     const hiddenHint = hiddenTests ? `，已隐藏 ${hiddenTests} 个单测` : '';
     const fileGroups = groupByFile(bindings, (b) => {
@@ -2791,6 +2809,21 @@
         return;
       }
       post({ type: 'ops.add', nodeId: opAdd.dataset.opAdd, kind: selectValue(kindEl, 'other'), title });
+      return;
+    }
+    const jumpNodeBtn = e.target.closest('[data-jump-node]');
+    if (jumpNodeBtn) {
+      const target = findNode(jumpNodeBtn.dataset.jumpNode);
+      if (target) {
+        commitHoverPeek();
+        if (canvasNode(target.id)) {
+          selectNode(target.id, { center: true });
+        } else if (isPrerequisiteNode(target)) {
+          focusExternalNode(target);
+        } else {
+          selectNode(target.id, { center: false });
+        }
+      }
       return;
     }
     const editNodeBtn = e.target.closest('[data-edit-node]');

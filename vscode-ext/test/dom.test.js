@@ -934,6 +934,11 @@ test('selecting a canvas node highlights it in blue, neighbors in amber, and dim
   const unrelated = document.querySelector('#dag-edges path.edge[data-from="rb-far"][data-to="rb-far2"]');
   assert.ok(incident && incident.classList.contains('edge-highlighted'), 'incident edge should be highlighted');
   assert.ok(unrelated && unrelated.classList.contains('edge-dimmed'), 'unrelated edge should be dimmed');
+  const jumpBtn = document.querySelector('#diff-body [data-jump-node="rb-b"]');
+  assert.ok(jumpBtn, 'right pane should list outgoing neighbor rb-b');
+  click(window, jumpBtn);
+  assert.ok(document.querySelector('.dag-node[data-node="rb-b"]').classList.contains('selected'),
+    'clicking neighbor link in right pane should select and jump to rb-b');
 });
 
 (async () => {
