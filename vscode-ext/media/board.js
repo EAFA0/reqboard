@@ -768,6 +768,28 @@
     renderAnchorLinks();
   }
 
+  function focusExternalDownstream(id) {
+    if (!id) {
+      return false;
+    }
+    const downstream = downstreamOfPrerequisite(id)
+      .map((e) => findNode(e.to))
+      .filter((x) => x && canvasNode(x.id));
+    if (downstream.length) {
+      return focusCanvasNodes(downstream);
+    }
+    if (state.showExternalCanvas) {
+      const self = findNode(id);
+      if (self && isCanvasNodeId(self.id)) {
+        const p = self.position || { x: 0, y: 0 };
+        centerOnRect(p.x, p.y, p.x + NODE_W, p.y + NODE_H, Math.max(state.view.scale, 1.05));
+        pulseNode(self.id);
+        return true;
+      }
+    }
+    return false;
+  }
+
   function focusExternalNode(n) {
     if (!n) {
       return;
@@ -775,12 +797,7 @@
     ensureDockShows([n]);
     selectExternal(n.id, { clearNode: true });
     pulseDock(n.id);
-    const downstream = downstreamOfPrerequisite(n.id)
-      .map((e) => findNode(e.to))
-      .filter((x) => x && isMainNode(x));
-    if (downstream.length) {
-      focusCanvasNodes(downstream);
-    }
+    focusExternalDownstream(n.id);
     applyExternalHighlight();
     renderAnchorLinks();
   }
@@ -1134,8 +1151,8 @@
     let scale = state.view.scale;
     if (typeof o.scale === 'number') {
       scale = o.scale;
-    } else if (o.zoom !== false && scale < 0.8) {
-      scale = 0.9;
+    } else if (o.zoom !== false && scale < 1.05) {
+      scale = 1.05;
     }
     const p = n.position || { x: 0, y: 0 };
     centerOnRect(p.x, p.y, p.x + NODE_W, p.y + NODE_H, scale);
@@ -1151,7 +1168,7 @@
       return false;
     }
     if (list.length === 1) {
-      centerOnNode(list[0], { scale: state.view.scale < 0.8 ? 0.9 : state.view.scale });
+      centerOnNode(list[0], { scale: Math.max(state.view.scale, 1.05) });
       return true;
     }
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -1168,11 +1185,14 @@
     const w = Math.max(1, maxX - minX);
     const h = Math.max(1, maxY - minY);
     const fit = Math.min((vw - 80) / w, (vh - 80) / h);
-    if (fit < 0.45) {
-      centerOnNode(list[0], { scale: 0.85 });
+    if (fit < 0.78) {
+      centerOnNode(list[0], { scale: 1.05 });
+      for (let i = 1; i < list.length; i++) {
+        pulseNode(list[i].id);
+      }
       return true;
     }
-    centerOnRect(minX, minY, maxX, maxY, Math.max(0.45, Math.min(1.0, fit)));
+    centerOnRect(minX, minY, maxX, maxY, Math.max(0.78, Math.min(1.15, fit)));
     for (const n of list) {
       pulseNode(n.id);
     }
@@ -1281,6 +1301,11 @@
     } else if (state.dockFilter === 'ready') {
       list = list.filter((n) => n.status === 'done');
     }
+    list = list.slice().sort((a, b) => {
+      const ad = a.status === 'done' ? 1 : 0;
+      const bd = b.status === 'done' ? 1 : 0;
+      return ad - bd;
+    });
     const active = activeExternal();
     const cards = list.map((n) => {
       const downstream = downstreamOfPrerequisite(n.id);
@@ -2673,10 +2698,15 @@
     if (isTodoNode(n)) {
       const rect = card.getBoundingClientRect();
       selectExternal(id);
+      focusExternalDownstream(id);
       openTodoEditor(n, rect);
       return;
     }
-    selectExternal(state.selectedExternal === id ? null : id);
+    const next = state.selectedExternal === id ? null : id;
+    selectExternal(next);
+    if (next) {
+      focusExternalDownstream(next);
+    }
   });
 
   $('dock-cards').addEventListener('mouseover', (e) => {

@@ -357,8 +357,8 @@ test('PRD anchor on a canvas node zooms in and centers it', () => {
   assert.ok(before.scale < 0.2, 'expected fitted-out initial scale, got ' + before.scale);
   click(window, document.querySelector('.prd-block[data-anchor="p-wide"]'));
   const after = parseTransform(world);
-  assert.ok(after.scale >= 0.8, 'scale not enlarged after anchor focus: ' + after.scale);
-  assert.ok(Math.abs(after.scale - 0.9) < 1e-6, 'expected scale 0.9, got ' + after.scale);
+  assert.ok(after.scale >= 1.0, 'scale not enlarged after anchor focus: ' + after.scale);
+  assert.ok(Math.abs(after.scale - 1.05) < 1e-6, 'expected scale 1.05, got ' + after.scale);
   const center = viewportCenter(after);
   assert.ok(Math.abs(center.x - 195) < 1, 'not centered on node x: ' + center.x);
   assert.ok(Math.abs(center.y - 500) < 1, 'not centered on node y: ' + center.y);
@@ -891,6 +891,35 @@ test('left PRD and right Diff panes collapse/expand, persist state, and PRD anch
   assert.ok(!cols.classList.contains('diff-collapsed'));
   assert.ok(!diff.classList.contains('collapsed'));
   assert.strictEqual(getUiState().diffCollapsed, false);
+});
+
+test('clicking a TODO dock card zooms in and centers on its downstream canvas node', () => {
+  const { document, window } = boot(wideSnapshot());
+  const world = document.getElementById('dag-world');
+  const before = parseTransform(world);
+  assert.ok(before.scale < 0.2, 'expected fitted-out initial scale, got ' + before.scale);
+  click(window, document.querySelector('.dock-card[data-todo-id="rb-todo"]'));
+  const after = parseTransform(world);
+  assert.ok(after.scale >= 0.78, 'expected zoomed-in readable scale on TODO click, got ' + after.scale);
+  assert.ok(after.scale > before.scale * 4, 'expected strong zoom-in from fitted-out view');
+  const center = viewportCenter(after);
+  assert.ok(center.x >= 190 && center.x <= 560 && Math.abs(center.y - 500) < 1,
+    'expected canvas centered on downstream nodes, got ' + JSON.stringify(center));
+});
+
+test('top prerequisite dock sorts unfinished nodes before done nodes', () => {
+  const snap = wideSnapshot();
+  // Put a done prerequisite first in the raw snapshot to ensure UI reorders unfinished ahead of done.
+  snap.dag.nodes = [
+    { id: 'rb-done-first', title: '已完成外部依赖', scope: 'external', status: 'done', position: { x: 0, y: 0 } },
+    ...snap.dag.nodes,
+  ];
+  const { document } = boot(snap);
+  const ids = [...document.querySelectorAll('.dock-card')].map((el) => el.dataset.extId);
+  const doneIdx = ids.indexOf('rb-done-first');
+  const pendingIdx = ids.indexOf('rb-todo');
+  assert.ok(pendingIdx >= 0 && doneIdx >= 0, 'expected both pending and done cards');
+  assert.ok(pendingIdx < doneIdx, 'unfinished prerequisite should appear before done: ' + JSON.stringify(ids));
 });
 
 console.log('all webview DOM tests passed');
