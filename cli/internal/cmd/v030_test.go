@@ -22,7 +22,7 @@ func addSourceFixture(t *testing.T, f *fixture) {
 	p := filepath.Join(f.root, "meeting.md")
 	testutil.Write(t, p, sourceMarkdown)
 	mustCLI(t, f.root, "source", "add", p, "--id", "meeting-review",
-		"--title", "评审补充口径", "--kind", "meeting", "--url", "https://example.com/review")
+		"--title", "评审补充口径", "--kind", "meeting", "--url", "https://example.com/review", "--actor", "human")
 }
 
 func TestSourceAddListAndStatus(t *testing.T) {
@@ -83,26 +83,26 @@ func TestSourceAddValidationAndTextInput(t *testing.T) {
 	p := filepath.Join(f.root, "meeting.md")
 	testutil.Write(t, p, sourceMarkdown)
 
-	if _, errOut, code := cli(t, f.root, "source", "add", p, "--id", "p"); code == 0 || !strings.Contains(errOut, "reserved") {
+	if _, errOut, code := cli(t, f.root, "source", "add", p, "--id", "p", "--actor", "human"); code == 0 || !strings.Contains(errOut, "reserved") {
 		t.Fatalf("id p not rejected: %s", errOut)
 	}
-	if _, _, code := cli(t, f.root, "source", "add", p, "--id", "bad id"); code == 0 {
+	if _, _, code := cli(t, f.root, "source", "add", p, "--id", "bad id", "--actor", "human"); code == 0 {
 		t.Fatal("invalid slug not rejected")
 	}
-	if _, _, code := cli(t, f.root, "source", "add", p, "--id", "ok", "--kind", "nope"); code == 0 {
+	if _, _, code := cli(t, f.root, "source", "add", p, "--id", "ok", "--kind", "nope", "--actor", "human"); code == 0 {
 		t.Fatal("invalid kind not rejected")
 	}
-	if _, _, code := cli(t, f.root, "source", "add", p, "--id", "ok", "--url", "file:///etc/passwd"); code == 0 {
+	if _, _, code := cli(t, f.root, "source", "add", p, "--id", "ok", "--url", "file:///etc/passwd", "--actor", "human"); code == 0 {
 		t.Fatal("non-http url not rejected")
 	}
 	addSourceFixture(t, f)
-	if _, errOut, code := cli(t, f.root, "source", "add", p, "--id", "meeting-review"); code == 0 || !strings.Contains(errOut, "already exists") {
+	if _, errOut, code := cli(t, f.root, "source", "add", p, "--id", "meeting-review", "--actor", "human"); code == 0 || !strings.Contains(errOut, "already exists") {
 		t.Fatalf("duplicate source not rejected: %s", errOut)
 	}
 
 	// --text is the paste-from-clipboard path.
 	out := mustCLI(t, f.root, "source", "add", "--text", "# 群聊拍板\n\n- 先做可见性。\n",
-		"--id", "chat-review", "--kind", "chat", "--json")
+		"--id", "chat-review", "--kind", "chat", "--actor", "human", "--json")
 	got := jsonMap(t, out)["source"].(map[string]interface{})
 	if got["id"] != "chat-review" || got["title"] != "群聊拍板" {
 		t.Fatalf("text source = %v", got)
@@ -114,7 +114,7 @@ func TestSourceAddValidationAndTextInput(t *testing.T) {
 	_ = w.Close()
 	os.Stdin = r
 	defer func() { os.Stdin = oldStdin }()
-	mustCLI(t, f.root, "source", "add", "-", "--id", "stdin-review", "--kind", "meeting")
+	mustCLI(t, f.root, "source", "add", "-", "--id", "stdin-review", "--kind", "meeting", "--actor", "human")
 	dag, _ := f.store.LoadDAG()
 	if dag.Source("stdin-review") == nil {
 		t.Fatal("stdin source not registered")
@@ -199,7 +199,7 @@ func TestSourceSyncCascadesStale(t *testing.T) {
 		"--prd-ref", "p:1-2", "--prd-ref", "p:1-3", "--prd-ref", "meeting-review:1-2")
 	newPath := filepath.Join(f.root, "meeting_v2.md")
 	testutil.Write(t, newPath, strings.Replace(sourceMarkdown, "- 线下单在支付成功后即可见。", "- 线下单在支付成功且风控通过后即可见。", 1))
-	out := mustCLI(t, f.root, "source", "sync", "meeting-review", newPath, "--json")
+	out := mustCLI(t, f.root, "source", "sync", "meeting-review", newPath, "--actor", "human", "--json")
 	m := jsonMap(t, out)
 	if len(m["modified"].([]interface{})) != 1 {
 		t.Fatalf("modified = %v", m["modified"])
@@ -222,10 +222,10 @@ func TestSourceRemoveGuardsReferences(t *testing.T) {
 	addSourceFixture(t, f)
 	mustCLI(t, f.root, "node", "update", "rb-a",
 		"--prd-ref", "p:1-2", "--prd-ref", "p:1-3", "--prd-ref", "meeting-review:1-2")
-	if _, errOut, code := cli(t, f.root, "source", "remove", "meeting-review"); code == 0 || !strings.Contains(errOut, "--force") {
+	if _, errOut, code := cli(t, f.root, "source", "remove", "meeting-review", "--actor", "human"); code == 0 || !strings.Contains(errOut, "--force") {
 		t.Fatalf("referenced source not guarded: %s", errOut)
 	}
-	out := mustCLI(t, f.root, "source", "remove", "meeting-review", "--force", "--json")
+	out := mustCLI(t, f.root, "source", "remove", "meeting-review", "--force", "--actor", "human", "--json")
 	if jsonMap(t, out)["stripped_refs"].(float64) != 1 {
 		t.Fatalf("stripped refs = %v", out)
 	}
@@ -241,4 +241,23 @@ func TestSourceRemoveGuardsReferences(t *testing.T) {
 	if _, err := f.store.ReadFile("sources/meeting-review.md"); err == nil {
 		t.Fatal("source file not removed")
 	}
+}
+
+func TestSourceMutationsRequireHumanActor(t *testing.T) {
+	f := setupCLI(t)
+	p := filepath.Join(f.root, "agent-grounding.md")
+	testutil.Write(t, p, "# Agent 代码调研\n\n- 疑似口径。\n")
+
+	if _, errOut, code := cli(t, f.root, "source", "add", p, "--id", "code-grounding"); code == 0 || !strings.Contains(errOut, "仅允许人类操作") {
+		t.Fatalf("agent source add should be blocked, got code=%d err=%s", code, errOut)
+	}
+	addSourceFixture(t, f)
+	if _, errOut, code := cli(t, f.root, "source", "sync", "meeting-review", p); code == 0 || !strings.Contains(errOut, "仅允许人类操作") {
+		t.Fatalf("agent source sync should be blocked, got code=%d err=%s", code, errOut)
+	}
+	if _, errOut, code := cli(t, f.root, "source", "remove", "meeting-review", "--force"); code == 0 || !strings.Contains(errOut, "仅允许人类操作") {
+		t.Fatalf("agent source remove should be blocked, got code=%d err=%s", code, errOut)
+	}
+	// Read-only source list remains allowed for agents.
+	mustCLI(t, f.root, "source", "list", "--json")
 }

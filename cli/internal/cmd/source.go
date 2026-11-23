@@ -96,10 +96,29 @@ func readSourceInput(a *Args, pos []string) ([]byte, *Error) {
 	return data, nil
 }
 
+func requireHumanSourceActor(ctx *Ctx, op string) *Error {
+	if ctx.Actor == "human" {
+		return nil
+	}
+	return &Error{
+		Code: 1,
+		Msg:  "only a human can modify requirement sources",
+		Text: fmt.Sprintf(
+			"[REQBOARD BLOCKED] 补充需求来源（`reqboard source %s`）是权威需求输入层，仅允许人类操作（--actor human），禁止 Agent 将自身代码调研/分析总结注册为需求来源或篡改已有来源。\n"+
+				"  -> 代码事实与排查结论请写入节点描述（`reqboard node update <id> --desc ...`）或直接向人类汇报；如发现需求缺口请建 TODO，由人类确认后在看板点「+ 来源」或加 `--actor human` 导入原始文档。\n",
+			op,
+		),
+		Data: map[string]interface{}{"ok": false, "op": "source." + op, "actor": ctx.Actor},
+	}
+}
+
 func sourceAdd(a *Args, pos []string) *Error {
 	ctx, e := NewCtx(a)
 	if e != nil {
 		return e
+	}
+	if ge := requireHumanSourceActor(ctx, "add"); ge != nil {
+		return ge
 	}
 	id := strings.TrimSpace(a.Str("id"))
 	if id == "" {
@@ -188,6 +207,9 @@ func sourceSync(a *Args, id, newPath string) *Error {
 	ctx, e := NewCtx(a)
 	if e != nil {
 		return e
+	}
+	if ge := requireHumanSourceActor(ctx, "sync"); ge != nil {
+		return ge
 	}
 	newRaw, rerr := os.ReadFile(newPath)
 	if rerr != nil {
@@ -340,6 +362,9 @@ func sourceRemove(a *Args, id string) *Error {
 	ctx, e := NewCtx(a)
 	if e != nil {
 		return e
+	}
+	if ge := requireHumanSourceActor(ctx, "remove"); ge != nil {
+		return ge
 	}
 	return ctx.WithLock(func() *Error {
 		dag, derr := ctx.Store.LoadDAG()

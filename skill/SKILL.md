@@ -13,9 +13,9 @@ description: 需求开发的本地控制面（支持单仓与多仓）：主 PRD
 ### Planner（只拆图，不写码）
 0. `reqboard init --name <slug>` 在无 git 子仓时进入规划模式；看板审完 DAG 后用 `reqboard repo add --name <n> --path <dir> [--base <ref>]` 挂载代码仓。
 1. `reqboard prd init <src.md>`；PRD 更新用 `prd sync <new.md>`（自动对齐锚点并级联 stale）。
-2. 主 PRD 之外的依据先登记为补充来源，再在 `prd_refs` 里用 `<source_id>:...` 锚点引用：
-   `reqboard source add <file.md> --id <slug> [--title ...] [--kind doc|meeting|chat|spec] [--url ...]`；
-   可直接 `--text "粘贴的会议纪要/群聊拍板"` 或 `--file -` 从 stdin 保存。更新用 `reqboard source sync <id> <new.md>`（级联 stale）。
+2. **补充来源是权威需求输入层（仅限人类操作）**：主 PRD 之外的原始会议纪要、群聊拍板或上游正式文档，由**人类**在看板点 `+ 来源` 或用 `--actor human` 登记：
+   `reqboard source add <file.md> --id <slug> [--title ...] [--kind doc|meeting|chat|spec] [--url ...] --actor human`（更新用 `source sync --actor human`）。
+   **严禁 Agent 将自己写的代码调研、分析总结注册为 `source` 或挂成 `prd_refs`**（CLI 会强制拦截非 `human` 写入，防止幻觉放大与需求漂移）；代码事实请写入节点 `description`/`note` 或直接汇报给人类。
    节点级拍板/外链用 `reqboard ref add <node_id> --title "..." [--kind url|meeting|decision|chat] [--url ...] [--quote "..."]`。
 3. `reqboard plan import plan.json`：按业务功能/规则拆节点，业务叶子必须有 `prd_refs`（可引用补充来源锚点）或 `refs`，DAG 必须无环；`todo` 前置节点允许无 `prd_refs`。`plan.json` 节点支持可选 `refs` 数组。
 4. `out_of_scope` 红线、`external` 依赖与工程 `todo` 前置必须显式建节点，禁止留给 Agent 脑补；TODO 可用 `reqboard todo add` 或 plan.json 的 `scope: "todo"` 建。
