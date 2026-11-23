@@ -1535,7 +1535,6 @@
   function fileGroupHTML(section, g, renderChild) {
     const toggleKey = `${section}:${g.key}`;
     const open = !!state.fileGroupOpen[toggleKey];
-    const top = g.items[0];
     const base = String(g.file || '').split('/').pop() || g.file;
     const dir = g.file.includes('/') ? g.file.slice(0, g.file.lastIndexOf('/')) : '';
     const stat = (g.added || g.deleted)
@@ -1544,7 +1543,7 @@
     const symCount = `<span class="fg-count">${g.items.length} 符号</span>`;
     const children = g.items.map(renderChild).join('');
     return `<div class="file-group">
-      <div class="file-group-head" data-open-diff data-repo="${esc(g.repo)}" data-file="${esc(g.file)}" data-symbol="${esc(top ? top.item.symbol : '')}" data-line="${top ? top.start : 0}" title="${esc(g.repo)}:${esc(g.file)}（点击看全文件 Diff；点左侧箭头展开符号）">
+      <div class="file-group-head" data-open-diff data-repo="${esc(g.repo)}" data-file="${esc(g.file)}" data-symbol="" data-line="0" title="${esc(g.repo)}:${esc(g.file)}（点击看全文件 Diff；点左侧箭头展开符号）">
         <button class="fg-toggle" data-file-toggle="${esc(toggleKey)}" title="${open ? '收起符号' : '展开符号'}">${open ? '▾' : '▸'}</button>
         <span class="fg-name">${esc(base)}</span>
         <span class="fg-path">${esc(g.repo)}${dir ? ':' + esc(dir) : ''}</span>
