@@ -12,6 +12,7 @@
   const STATE_KEY = 'reqboard.web.uiState:' + location.pathname;
   const THEME_KEY = 'reqboard.web.theme';
   const DIFF_MODE_KEY = 'reqboard.web.diffMode';
+  const DIFF_FULLSCREEN_KEY = 'reqboard.web.diffFullscreen';
   const LAUNCH_STATS_KEY = 'reqboard.web.launcherStats';
 
   const DEFAULT_PROMPTS = {
@@ -28,7 +29,8 @@
     open: false,
     req: null,
     data: null,
-    mode: localStorage.getItem(DIFF_MODE_KEY) || 'unified',
+    mode: localStorage.getItem(DIFF_MODE_KEY) || 'split',
+    fullscreen: localStorage.getItem(DIFF_FULLSCREEN_KEY) === '1',
     fullContext: false,
     backStack: [],
     forwardStack: [],
@@ -145,6 +147,7 @@
           <button id="wdiff-unified" title="Unified 单栏视图">Unified</button>
           <button id="wdiff-split" title="Side-by-Side 双栏对比">Split</button>
           <button id="wdiff-context" title="切换仅看变更片段 / 完整文件上下文">完整上下文</button>
+          <button id="wdiff-fullscreen" title="切换全屏 / 窗口模式">⛶ 全屏</button>
           <button id="wdiff-copy-loc" title="复制 file:line（适合 GoLand Cmd+Shift+O）">复制 file:line</button>
           <button id="wdiff-copy-abs" title="复制文件绝对路径">复制路径</button>
           <button id="wdiff-open-ide" class="hidden" title="调用 reqboard serve --open-cmd 在本地 IDE 打开">在 IDE 打开</button>
@@ -177,7 +180,19 @@
     };
     document.getElementById('wdiff-prev-hunk').onclick = () => jumpHunk(-1);
     document.getElementById('wdiff-next-hunk').onclick = () => jumpHunk(1);
-    document.getElementById('wdiff-body').addEventListener('click', async (e) => {
+    document.getElementById('wdiff-fullscreen').onclick = () => {
+      diffState.fullscreen = !diffState.fullscreen;
+      localStorage.setItem(DIFF_FULLSCREEN_KEY, diffState.fullscreen ? '1' : '0');
+      applyDiffFullscreen();
+    };
+    const wdiffBody = document.getElementById('wdiff-body');
+    wdiffBody.addEventListener('mousedown', (e) => {
+      if (e.metaKey || e.ctrlKey) {
+        // Prevent browser Shift+Click range-selection from highlighting the whole file.
+        e.preventDefault();
+      }
+    });
+    wdiffBody.addEventListener('click', async (e) => {
       hideCandidates();
       const ln = e.target.closest('td.ln');
       if (ln) {
@@ -368,13 +383,26 @@
     return { col: start + 1, word };
   }
 
+  function applyDiffFullscreen() {
+    const backdrop = document.getElementById('web-diff-backdrop');
+    if (backdrop) {
+      backdrop.classList.toggle('fullscreen', !!diffState.fullscreen);
+    }
+    const btn = document.getElementById('wdiff-fullscreen');
+    if (btn) {
+      btn.classList.toggle('active', !!diffState.fullscreen);
+      btn.textContent = diffState.fullscreen ? '⛶ 退出全屏' : '⛶ 全屏';
+    }
+  }
+
   function showCandidates(locs, source, x, y, kindLabel) {
     const box = document.getElementById('wdiff-candidates');
     if (!box) return;
     const rows = locs.map((loc, idx) => {
-      const label = loc.repo === '__external__' ? loc.file : `${loc.repo}:${loc.file}`;
-      return `<button class="wdiff-cand-item" data-cand-idx="${idx}">
-        <span class="wdiff-cand-loc">${esc(label)}:${loc.line}</span>
+      const fullPath = loc.repo === '__external__' ? loc.file : `${loc.repo}:${loc.file}`;
+      const base = String(loc.file || '').split('/').pop() || loc.file;
+      return `<button class="wdiff-cand-item" data-cand-idx="${idx}" title="${esc(fullPath)}:${loc.line}">
+        <span class="wdiff-cand-loc"><span class="wdiff-cand-file">${esc(base)}:${loc.line}</span><span class="wdiff-cand-path">${esc(fullPath)}</span></span>
         <span class="wdiff-cand-preview">${esc(loc.preview || '')}</span>
       </button>`;
     }).join('');
@@ -476,6 +504,7 @@
     updateNavButtons();
     const backdrop = document.getElementById('web-diff-backdrop');
     backdrop.classList.remove('hidden');
+    applyDiffFullscreen();
     if (!wasOpen) {
       document.getElementById('wdiff-body').innerHTML = '<div class="wdiff-empty">正在读取 git diff…</div>';
     }

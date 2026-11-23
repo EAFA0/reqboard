@@ -84,6 +84,17 @@
   display: none;
 }
 
+#web-diff-backdrop.fullscreen {
+  padding: 0;
+}
+
+#web-diff-backdrop.fullscreen #web-diff-modal {
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+  border: none;
+}
+
 #web-diff-modal {
   width: min(1360px, 96vw);
   height: min(88vh, 920px);
@@ -240,11 +251,15 @@
 
 .wdiff-table tr.focus-line td,
 .wdiff-split-table tr.focus-line td {
-  background: rgba(227, 179, 65, 0.24);
+  background: rgba(59, 130, 246, 0.24) !important;
+}
+.wdiff-table tr.focus-line td:first-child,
+.wdiff-split-table tr.focus-line td:first-child {
+  box-shadow: inset 3px 0 0 var(--rb-accent);
 }
 :root.theme-light .wdiff-table tr.focus-line td,
 :root.theme-light .wdiff-split-table tr.focus-line td {
-  background: #fff8c5;
+  background: #dbeafe !important;
   color: #1f2328;
 }
 
@@ -330,6 +345,23 @@
 .wdiff-cand-loc {
   color: var(--rb-blue);
   font-weight: 600;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.wdiff-cand-file {
+  flex: 0 0 auto;
+}
+
+.wdiff-cand-path {
+  color: var(--rb-muted);
+  font-weight: 400;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .wdiff-cand-preview {
