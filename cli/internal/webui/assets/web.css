@@ -18,9 +18,23 @@
   --vscode-button-foreground: #ffffff;
   --vscode-list-hoverBackground: rgba(255, 255, 255, 0.06);
   --vscode-editor-font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+
+  --rb-bg: #16181d;
+  --rb-panel: #1d2026;
+  --rb-panel-2: #252932;
+  --rb-fg: #d7dce5;
+  --rb-muted: #8b949e;
+  --rb-border: #303642;
+  --rb-accent: #3b82f6;
+  --rb-green: #3fb950;
+  --rb-red: #f85149;
+  --rb-orange: #d29922;
+  --rb-yellow: #e3b341;
+  --rb-blue: #58a6ff;
+  --rb-gray: #8b949e;
 }
 
-body.theme-light {
+:root.theme-light {
   --vscode-editor-background: #ffffff;
   --vscode-sideBar-background: #f6f8fa;
   --vscode-editorWidget-background: #eef1f5;
@@ -37,6 +51,14 @@ body.theme-light {
   --vscode-button-background: #0969da;
   --vscode-button-foreground: #ffffff;
   --vscode-list-hoverBackground: rgba(9, 105, 218, 0.06);
+
+  --rb-bg: #ffffff;
+  --rb-panel: #f6f8fa;
+  --rb-panel-2: #eef1f5;
+  --rb-fg: #1f2328;
+  --rb-muted: #57606a;
+  --rb-border: #d0d7de;
+  --rb-accent: #0969da;
   --rb-green: #1a7f37;
   --rb-red: #cf222e;
   --rb-orange: #9a6700;
@@ -63,11 +85,12 @@ body.theme-light {
 }
 
 #web-diff-modal {
-  width: min(1320px, 95vw);
-  height: min(86vh, 900px);
+  width: min(1360px, 96vw);
+  height: min(88vh, 920px);
   display: flex;
   flex-direction: column;
   background: var(--rb-bg);
+  color: var(--rb-fg);
   border: 1px solid var(--rb-border);
   border-radius: 8px;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
@@ -93,6 +116,7 @@ body.theme-light {
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 12px;
   font-weight: 600;
+  color: var(--rb-fg);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -137,9 +161,11 @@ body.theme-light {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  background: var(--rb-bg);
+  color: var(--rb-fg);
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.55;
   tab-size: 4;
 }
 
@@ -149,94 +175,46 @@ body.theme-light {
   color: var(--rb-muted);
 }
 
-.wdiff-table {
-  width: 100%;
-  border-collapse: collapse;
-  table-layout: fixed;
-}
-
-.wdiff-table td {
-  padding: 0 8px;
-  vertical-align: top;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.wdiff-table .ln {
-  width: 52px;
-  text-align: right;
-  color: var(--rb-muted);
-  user-select: none;
-  border-right: 1px solid var(--rb-border);
-  opacity: 0.78;
-}
-
-.wdiff-table .sig {
-  width: 20px;
-  text-align: center;
-  user-select: none;
-  font-weight: 700;
-}
-
-.wdiff-table tr.hunk td {
-  background: rgba(59, 130, 246, 0.14);
-  color: var(--rb-blue);
-  padding: 4px 10px;
-  font-size: 11px;
-  border-top: 1px solid var(--rb-border);
-  border-bottom: 1px solid var(--rb-border);
-}
-
-.wdiff-table tr.add td {
-  background: rgba(63, 185, 80, 0.14);
-}
-.wdiff-table tr.add .sig { color: var(--rb-green); }
-
-.wdiff-table tr.del td {
-  background: rgba(248, 81, 73, 0.15);
-}
-.wdiff-table tr.del .sig { color: var(--rb-red); }
-
-body.theme-light .wdiff-table tr.add td { background: #dafbe1; }
-body.theme-light .wdiff-table tr.del td { background: #ffebe9; }
-body.theme-light .wdiff-table tr.hunk td { background: #ddf4ff; }
-
-.wdiff-table tr.focus-line td {
-  outline: 1px solid var(--rb-yellow);
-  background: rgba(227, 179, 65, 0.22);
-}
-
+.wdiff-table,
 .wdiff-split-table {
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
 }
 
+.wdiff-table td,
 .wdiff-split-table td {
-  padding: 0 8px;
+  padding: 1px 8px;
   vertical-align: top;
+  color: var(--rb-fg);
   white-space: pre-wrap;
   word-break: break-word;
 }
 
+.wdiff-table .ln,
 .wdiff-split-table .ln {
-  width: 48px;
   text-align: right;
   color: var(--rb-muted);
   user-select: none;
   border-right: 1px solid var(--rb-border);
-  opacity: 0.78;
+  cursor: pointer;
+  padding: 1px 6px;
 }
 
-.wdiff-split-table .code-left {
-  border-right: 1px solid var(--rb-border);
+.wdiff-table .ln:hover,
+.wdiff-split-table .ln:hover {
+  color: var(--rb-accent);
+  text-decoration: underline;
 }
 
-.wdiff-split-table td.cell-del { background: rgba(248, 81, 73, 0.15); }
-.wdiff-split-table td.cell-add { background: rgba(63, 185, 80, 0.14); }
-.wdiff-split-table td.cell-empty { background: rgba(128, 128, 128, 0.06); }
-body.theme-light .wdiff-split-table td.cell-del { background: #ffebe9; }
-body.theme-light .wdiff-split-table td.cell-add { background: #dafbe1; }
+.wdiff-table .sig {
+  text-align: center;
+  user-select: none;
+  font-weight: 700;
+  padding: 1px 2px;
+}
+
+.wdiff-table tr.hunk td,
 .wdiff-split-table tr.hunk td {
   background: rgba(59, 130, 246, 0.14);
   color: var(--rb-blue);
@@ -245,9 +223,37 @@ body.theme-light .wdiff-split-table td.cell-add { background: #dafbe1; }
   border-top: 1px solid var(--rb-border);
   border-bottom: 1px solid var(--rb-border);
 }
+
+.wdiff-table tr.add td { background: rgba(63, 185, 80, 0.16); }
+.wdiff-table tr.add .sig { color: var(--rb-green); }
+
+.wdiff-table tr.del td { background: rgba(248, 81, 73, 0.16); }
+.wdiff-table tr.del .sig { color: var(--rb-red); }
+
+:root.theme-light .wdiff-table tr.add td { background: #dafbe1; color: #1f2328; }
+:root.theme-light .wdiff-table tr.del td { background: #ffebe9; color: #1f2328; }
+:root.theme-light .wdiff-table tr.hunk td { background: #ddf4ff; color: #0969da; }
+
+.wdiff-table tr.focus-line td,
 .wdiff-split-table tr.focus-line td {
-  background: rgba(227, 179, 65, 0.22);
+  background: rgba(227, 179, 65, 0.24);
 }
+:root.theme-light .wdiff-table tr.focus-line td,
+:root.theme-light .wdiff-split-table tr.focus-line td {
+  background: #fff8c5;
+  color: #1f2328;
+}
+
+.wdiff-split-table .code-left {
+  border-right: 1px solid var(--rb-border);
+}
+
+.wdiff-split-table td.cell-del { background: rgba(248, 81, 73, 0.16); }
+.wdiff-split-table td.cell-add { background: rgba(63, 185, 80, 0.16); }
+.wdiff-split-table td.cell-empty { background: rgba(128, 128, 128, 0.06); }
+:root.theme-light .wdiff-split-table td.cell-del { background: #ffebe9; color: #1f2328; }
+:root.theme-light .wdiff-split-table td.cell-add { background: #dafbe1; color: #1f2328; }
+:root.theme-light .wdiff-split-table td.cell-empty { background: #f6f8fa; }
 
 .wdiff-foot {
   display: flex;

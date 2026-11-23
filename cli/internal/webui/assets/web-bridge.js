@@ -136,10 +136,12 @@
       <div class="wdiff-head">
         <div class="wdiff-title" id="wdiff-title">Code Diff</div>
         <div class="wdiff-actions">
+          <button id="wdiff-prev-hunk" title="上一个变更块">↑ 变更</button>
+          <button id="wdiff-next-hunk" title="下一个变更块">↓ 变更</button>
           <button id="wdiff-unified" title="Unified 单栏视图">Unified</button>
           <button id="wdiff-split" title="Side-by-Side 双栏对比">Split</button>
           <button id="wdiff-context" title="切换仅看变更片段 / 完整文件上下文">完整上下文</button>
-          <button id="wdiff-copy-loc" title="复制 repo/file:line（适合 GoLand Cmd+Shift+O）">复制 file:line</button>
+          <button id="wdiff-copy-loc" title="复制 file:line（适合 GoLand Cmd+Shift+O）">复制 file:line</button>
           <button id="wdiff-copy-abs" title="复制文件绝对路径">复制路径</button>
           <button id="wdiff-open-ide" class="hidden" title="调用 reqboard serve --open-cmd 在本地 IDE 打开">在 IDE 打开</button>
           <button id="wdiff-close" title="关闭（Esc）">✕</button>
@@ -148,7 +150,7 @@
       <div class="wdiff-body" id="wdiff-body"></div>
       <div class="wdiff-foot">
         <span id="wdiff-meta"></span>
-        <span>Esc 关闭 · 滚轮浏览 · 可随时切换 Unified / Split</span>
+        <span>点击行号复制 file:line · Esc 关闭 · Unified / Split 切换</span>
       </div>
     </div>`;
     document.body.appendChild(backdrop);
@@ -159,6 +161,24 @@
       }
     });
     document.getElementById('wdiff-close').onclick = closeDiffModal;
+    let hunkIdx = -1;
+    const jumpHunk = (delta) => {
+      const hunks = [...document.querySelectorAll('#wdiff-body tr.hunk')];
+      if (!hunks.length) return;
+      hunkIdx = (hunkIdx + delta + hunks.length) % hunks.length;
+      hunks[hunkIdx].scrollIntoView({ block: 'start', behavior: 'smooth' });
+    };
+    document.getElementById('wdiff-prev-hunk').onclick = () => jumpHunk(-1);
+    document.getElementById('wdiff-next-hunk').onclick = () => jumpHunk(1);
+    document.getElementById('wdiff-body').addEventListener('click', async (e) => {
+      const ln = e.target.closest('td.ln');
+      if (!ln) return;
+      const lineNo = Number(ln.textContent.trim() || 0);
+      if (!lineNo || !diffState.data) return;
+      const loc = `${diffState.data.file}:${lineNo}`;
+      await copyClipboard(loc);
+      emitToBoard({ type: 'toast', message: '已复制 ' + loc });
+    });
     document.getElementById('wdiff-unified').onclick = () => {
       diffState.mode = 'unified';
       localStorage.setItem(DIFF_MODE_KEY, 'unified');
@@ -268,7 +288,7 @@
         </tr>`;
       }
     }
-    return `<table class="wdiff-table"><tbody>${rows}</tbody></table>`;
+    return `<table class="wdiff-table"><colgroup><col style="width:52px"><col style="width:52px"><col style="width:22px"><col></colgroup><tbody>${rows}</tbody></table>`;
   }
 
   function renderSplit(hunks, focusLine) {
@@ -308,7 +328,7 @@
         }
       }
     }
-    return `<table class="wdiff-split-table"><tbody>${rows}</tbody></table>`;
+    return `<table class="wdiff-split-table"><colgroup><col style="width:48px"><col style="width:calc(50% - 48px)"><col style="width:48px"><col style="width:calc(50% - 48px)"></colgroup><tbody>${rows}</tbody></table>`;
   }
 
   function renderDiffModal() {
@@ -477,6 +497,7 @@
   /* ---------------- Theme toggle for standalone browser ---------------- */
 
   function applyTheme(theme) {
+    document.documentElement.classList.toggle('theme-light', theme === 'light');
     document.body.classList.toggle('theme-light', theme === 'light');
     const btn = document.getElementById('btn-theme');
     if (btn) {
@@ -490,7 +511,7 @@
     const btn = document.getElementById('btn-theme');
     if (btn) {
       btn.onclick = () => {
-        const next = document.body.classList.contains('theme-light') ? 'dark' : 'light';
+        const next = document.documentElement.classList.contains('theme-light') ? 'dark' : 'light';
         localStorage.setItem(THEME_KEY, next);
         applyTheme(next);
       };
