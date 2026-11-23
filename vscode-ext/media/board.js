@@ -16,6 +16,7 @@
     connect: null,
     popup: null,
     bucketOpen: { orphan: true, todelete: true, broken: false },
+    fileGroupOpen: {},
     dockHidden: false,
     dockFilter: 'all',
     dockType: 'all',
@@ -1508,14 +1509,69 @@
 
   /* ---------------- right panel ---------------- */
 
+  function groupByFile(items, statOf) {
+    const map = Object.create(null);
+    const list = [];
+    for (const item of items) {
+      const repo = item.repo || '';
+      const file = item.file || '';
+      const key = `${repo}:${file}`;
+      if (!map[key]) {
+        map[key] = { key, repo, file, added: 0, deleted: 0, items: [] };
+        list.push(map[key]);
+      }
+      const st = statOf ? statOf(item) : { added: item.added || 0, deleted: item.deleted || 0, start: item.start || 0 };
+      map[key].added += Number(st.added || 0);
+      map[key].deleted += Number(st.deleted || 0);
+      map[key].items.push({ item, added: Number(st.added || 0), deleted: Number(st.deleted || 0), start: Number(st.start || 0) });
+    }
+    for (const g of list) {
+      g.items.sort((a, b) => (b.added + b.deleted) - (a.added + a.deleted));
+    }
+    list.sort((a, b) => (b.added + b.deleted) - (a.added + a.deleted) || a.key.localeCompare(b.key));
+    return list;
+  }
+
+  function fileGroupHTML(section, g, renderChild) {
+    const toggleKey = `${section}:${g.key}`;
+    const open = !!state.fileGroupOpen[toggleKey];
+    const top = g.items[0];
+    const base = String(g.file || '').split('/').pop() || g.file;
+    const dir = g.file.includes('/') ? g.file.slice(0, g.file.lastIndexOf('/')) : '';
+    const stat = (g.added || g.deleted)
+      ? `<span class="stat"><span class="add">+${g.added}</span> <span class="del">-${g.deleted}</span></span>`
+      : '';
+    const symCount = `<span class="fg-count">${g.items.length} 符号</span>`;
+    const children = g.items.map(renderChild).join('');
+    return `<div class="file-group">
+      <div class="file-group-head" data-open-diff data-repo="${esc(g.repo)}" data-file="${esc(g.file)}" data-symbol="${esc(top ? top.item.symbol : '')}" data-line="${top ? top.start : 0}" title="${esc(g.repo)}:${esc(g.file)}（点击看全文件 Diff；点左侧箭头展开符号）">
+        <button class="fg-toggle" data-file-toggle="${esc(toggleKey)}" title="${open ? '收起符号' : '展开符号'}">${open ? '▾' : '▸'}</button>
+        <span class="fg-name">${esc(base)}</span>
+        <span class="fg-path">${esc(g.repo)}${dir ? ':' + esc(dir) : ''}</span>
+        ${symCount}${stat}
+      </div>
+      <div class="file-group-body ${open ? '' : 'hidden'}">${children}</div>
+    </div>`;
+  }
+
   function bucketHTML(key, title, items, renderItem) {
     const open = state.bucketOpen[key] !== false;
-    const body = items.length ? items.map(renderItem).join('') : '<div class="empty">无</div>';
+    let body = '<div class="empty">无</div>';
+    let countLabel = `(${items.length})`;
+    if (items.length) {
+      if (key === 'orphan' || key === 'todelete') {
+        const groups = groupByFile(items);
+        countLabel = `(${groups.length} 文件 · ${items.length} 符号)`;
+        body = groups.map((g) => fileGroupHTML(key, g, (entry) => renderItem(entry.item))).join('');
+      } else {
+        body = items.map(renderItem).join('');
+      }
+    }
     const quickAction = key === 'orphan' && items.length > 0
       ? '<button class="bucket-action-btn" data-launch-action="audit_orphan" title="发射本地 Agent 审计 Orphan Diff">审计</button>'
       : '';
     return `<div class="bucket">
-      <div class="bucket-head ${key}" data-bucket="${key}"><span>${esc(title)} (${items.length})</span><span class="bucket-head-actions">${quickAction}<span>${open ? '▾' : '▸'}</span></span></div>
+      <div class="bucket-head ${key}" data-bucket="${key}"><span>${esc(title)} ${countLabel}</span><span class="bucket-head-actions">${quickAction}<span>${open ? '▾' : '▸'}</span></span></div>
       <div class="bucket-body ${open ? '' : 'hidden'}">${body}</div>
     </div>`;
   }
@@ -1523,7 +1579,7 @@
   function diffItemHTML(e) {
     const owner = (e.node_ids || []).length ? `<div class="why">node ${esc((e.node_ids || []).join(', '))}</div>` : '';
     return `<div class="diff-item" data-open-diff data-repo="${esc(e.repo)}" data-file="${esc(e.file)}" data-symbol="${esc(e.symbol)}" data-line="${e.start || 0}" title="${esc(e.correction || '')}">
-      <div class="loc">${esc(e.repo)}:${esc(e.file)} :: ${esc(e.symbol)}<span class="stat"><span class="add">+${e.added || 0}</span> <span class="del">-${e.deleted || 0}</span></span></div>
+      <div class="loc">${esc(e.symbol)}<span class="stat"><span class="add">+${e.added || 0}</span> <span class="del">-${e.deleted || 0}</span></span></div>
       ${owner}
     </div>`;
   }
@@ -1709,20 +1765,27 @@
       html += `<div class="why">${esc(selected.description)}</div>`;
     }
     const hiddenHint = hiddenTests ? `，已隐藏 ${hiddenTests} 个单测` : '';
-    html += `<div class="section-title">本节点 Diff / 挂载符号 (${bindings.length}${hiddenHint})</div>`;
+    const fileGroups = groupByFile(bindings, (b) => {
+      const hit = attrByKey[`${b.repo || ''}:${b.file || ''}::${b.symbol || ''}`];
+      return hit ? { added: hit.added || 0, deleted: hit.deleted || 0, start: hit.start || 0 } : { added: 0, deleted: 0, start: 0 };
+    });
+    const countText = bindings.length
+      ? `${fileGroups.length} 文件 · ${bindings.length} 符号${hiddenHint}`
+      : `0${hiddenHint}`;
+    html += `<div class="section-title">本节点 Diff (${countText})</div>`;
     if (!bindings.length) {
       html += '<div class="empty">尚未 bind；本节点范围内的改动会进下方全局 Orphan Diff。</div>';
     }
-    for (const b of bindings) {
-      const hit = attrByKey[`${b.repo || ''}:${b.file || ''}::${b.symbol || ''}`];
-      const stat = hit
-        ? `<span class="stat"><span class="add">+${hit.added || 0}</span> <span class="del">-${hit.deleted || 0}</span></span>`
-        : '';
-      const line = hit && hit.start ? hit.start : 0;
-      html += `<div class="binding" data-open-diff data-repo="${esc(b.repo)}" data-file="${esc(b.file)}" data-symbol="${esc(b.symbol)}" data-line="${line}">
-        <div class="loc">${esc(b.repo)}:${esc(b.file)} :: ${esc(b.symbol)}${stat}<span class="role-chip role-${esc(b.role)}">${esc(b.role)}</span></div>
-        <div class="why">${esc(b.why || '')}</div>
-      </div>`;
+    for (const g of fileGroups) {
+      html += fileGroupHTML(`node:${selected.id}`, g, ({ item: b, added, deleted, start }) => {
+        const stat = (added || deleted)
+          ? `<span class="stat"><span class="add">+${added}</span> <span class="del">-${deleted}</span></span>`
+          : '';
+        return `<div class="binding" data-open-diff data-repo="${esc(b.repo)}" data-file="${esc(b.file)}" data-symbol="${esc(b.symbol)}" data-line="${start}">
+          <div class="loc">${esc(b.symbol)}${stat}<span class="role-chip role-${esc(b.role)}">${esc(b.role)}</span></div>
+          ${b.why ? `<div class="why">${esc(b.why)}</div>` : ''}
+        </div>`;
+      });
     }
     if (mocks.length) {
       html += '<div class="section-title">Mock 债</div>';
@@ -2533,6 +2596,14 @@
     if (head) {
       const key = head.dataset.bucket;
       state.bucketOpen[key] = state.bucketOpen[key] === false;
+      renderRight();
+      return;
+    }
+    const fileToggle = e.target.closest('[data-file-toggle]');
+    if (fileToggle) {
+      e.stopPropagation();
+      const key = fileToggle.dataset.fileToggle;
+      state.fileGroupOpen[key] = !state.fileGroupOpen[key];
       renderRight();
       return;
     }

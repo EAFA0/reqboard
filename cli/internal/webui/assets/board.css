@@ -1454,20 +1454,114 @@ textarea:focus {
 }
 
 .diff-item .stat,
-.binding .stat {
+.binding .stat,
+.file-group-head .stat {
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: 10px;
   margin-left: 4px;
+  flex: 0 0 auto;
 }
 
 .diff-item .stat .add,
-.binding .stat .add {
+.binding .stat .add,
+.file-group-head .stat .add {
   color: var(--rb-green);
 }
 
 .diff-item .stat .del,
-.binding .stat .del {
+.binding .stat .del,
+.file-group-head .stat .del {
   color: var(--rb-red);
+}
+
+.file-group {
+  border: 1px solid var(--rb-border);
+  border-radius: var(--rb-radius);
+  margin-bottom: 5px;
+  background: var(--rb-panel);
+  overflow: hidden;
+}
+
+.bucket-body .file-group {
+  border-left: none;
+  border-right: none;
+  border-radius: 0;
+  margin-bottom: 0;
+  border-bottom: none;
+  background: transparent;
+}
+
+.file-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.file-group-head:hover {
+  background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.05));
+}
+
+.fg-toggle {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  line-height: 16px;
+  text-align: center;
+  font-size: 11px;
+  border: none;
+  background: transparent;
+  color: var(--rb-muted);
+}
+
+.fg-toggle:hover {
+  color: var(--rb-fg);
+  background: var(--rb-panel-2);
+}
+
+.fg-name {
+  flex: 0 0 auto;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-weight: 600;
+  color: var(--rb-fg);
+}
+
+.fg-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 10px;
+  color: var(--rb-muted);
+}
+
+.fg-count {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--rb-muted);
+  border: 1px solid var(--rb-border);
+  border-radius: 9px;
+  padding: 0 5px;
+}
+
+.file-group-body {
+  padding: 2px 6px 4px 24px;
+  border-top: 1px solid rgba(128, 128, 128, 0.14);
+}
+
+.file-group-body.hidden {
+  display: none;
+}
+
+.file-group-body .binding {
+  margin-bottom: 4px;
+  padding: 4px 7px;
+  font-size: 11px;
 }
 
 .section-title {

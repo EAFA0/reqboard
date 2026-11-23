@@ -802,10 +802,16 @@ test('selected node diff renders above global orphan alerts with attributed stat
   assert.strictEqual(diffBody.scrollTop, 0, 'diff pane should scroll to top on node select');
 
   const html = diffBody.innerHTML;
-  const bindingIdx = html.indexOf('本节点 Diff / 挂载符号 (1)');
-  const orphanIdx = html.indexOf('Orphan Diff (2)');
+  const bindingIdx = html.indexOf('本节点 Diff (1 文件 · 1 符号)');
+  const orphanIdx = html.indexOf('Orphan Diff (2 文件 · 2 符号)');
   assert.ok(bindingIdx >= 0, 'node diff section missing');
   assert.ok(orphanIdx > bindingIdx, 'selected node diff must render above global Orphan Diff');
+
+  // File groups start collapsed; clicking chevron expands child symbol cards.
+  const fgBody = diffBody.querySelector('.file-group-body');
+  assert.ok(fgBody && fgBody.classList.contains('hidden'), 'file group should default collapsed');
+  click(window, diffBody.querySelector('[data-file-toggle]'));
+  assert.ok(!diffBody.querySelector('.file-group-body').classList.contains('hidden'), 'file group should expand on chevron click');
 
   const bindingEl = diffBody.querySelector('.binding');
   assert.ok(bindingEl, 'binding card missing');
