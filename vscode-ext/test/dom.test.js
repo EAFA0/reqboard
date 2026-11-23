@@ -357,8 +357,7 @@ test('PRD anchor on a canvas node zooms in and centers it', () => {
   assert.ok(before.scale < 0.2, 'expected fitted-out initial scale, got ' + before.scale);
   click(window, document.querySelector('.prd-block[data-anchor="p-wide"]'));
   const after = parseTransform(world);
-  assert.ok(after.scale >= 1.0, 'scale not enlarged after anchor focus: ' + after.scale);
-  assert.ok(Math.abs(after.scale - 1.05) < 1e-6, 'expected scale 1.05, got ' + after.scale);
+  assert.ok(after.scale >= 1.05 && after.scale <= 1.55, 'expected adaptive scale in [1.05, 1.55], got ' + after.scale);
   const center = viewportCenter(after);
   assert.ok(Math.abs(center.x - 195) < 1, 'not centered on node x: ' + center.x);
   assert.ok(Math.abs(center.y - 500) < 1, 'not centered on node y: ' + center.y);
@@ -922,4 +921,49 @@ test('top prerequisite dock sorts unfinished nodes before done nodes', () => {
   assert.ok(pendingIdx < doneIdx, 'unfinished prerequisite should appear before done: ' + JSON.stringify(ids));
 });
 
-console.log('all webview DOM tests passed');
+(async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // 1. Hovering a dock card peeks (zooms & centers), leaving restores original view.
+  {
+    const { document, window } = boot(wideSnapshot());
+    const world = document.getElementById('dag-world');
+    const before = parseTransform(world);
+    const ext = document.querySelector('.dock-card[data-ext-id="rb-ext"]');
+    ext.dispatchEvent(new window.Event('mouseover', { bubbles: true }));
+    await wait(140);
+    const during = parseTransform(world);
+    assert.ok(during.scale >= 1.05 && during.scale <= 1.55, 'expected adaptive hover-peek scale, got ' + during.scale);
+    assert.ok(world.classList.contains('camera-anim'), 'expected smooth camera animation on hover peek');
+    const center = viewportCenter(during);
+    assert.ok(Math.abs(center.x - 195) < 1 && Math.abs(center.y - 500) < 1,
+      'hover peek did not center on downstream node: ' + JSON.stringify(center));
+    ext.dispatchEvent(new window.Event('mouseout', { bubbles: true }));
+    await wait(160);
+    const after = parseTransform(world);
+    assert.ok(Math.abs(after.scale - before.scale) < 1e-6 && Math.abs(after.tx - before.tx) < 1e-4 && Math.abs(after.ty - before.ty) < 1e-4,
+      'expected view restored after mouseout: before=' + JSON.stringify(before) + ' after=' + JSON.stringify(after));
+    console.log('ok - hovering dock card adaptively zooms & centers and restores view on leave');
+  }
+  // 2. Hovering a PRD block peeks and restores; clicking commits so leave does not snap back.
+  {
+    const { document, window } = boot(wideSnapshot());
+    const world = document.getElementById('dag-world');
+    const before = parseTransform(world);
+    const block = document.querySelector('.prd-block[data-anchor="p-wide"]');
+    block.dispatchEvent(new window.Event('mouseover', { bubbles: true }));
+    await wait(180);
+    const during = parseTransform(world);
+    assert.ok(during.scale >= 1.05, 'expected PRD hover-peek zoom, got ' + during.scale);
+    click(window, block);
+    block.dispatchEvent(new window.Event('mouseout', { bubbles: true }));
+    await wait(160);
+    const afterClickLeave = parseTransform(world);
+    assert.ok(afterClickLeave.scale >= 1.05 && afterClickLeave.scale !== before.scale,
+      'expected clicked PRD block to keep zoomed view after mouseout');
+    console.log('ok - hovering PRD block peeks and clicking commits zoom');
+  }
+  console.log('all webview DOM tests passed');
+})().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

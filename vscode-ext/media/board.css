@@ -392,6 +392,10 @@ textarea:focus {
   will-change: transform;
 }
 
+#dag-world.camera-anim {
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 #dag-edges {
   position: absolute;
   left: 0;

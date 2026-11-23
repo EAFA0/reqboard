@@ -21,6 +21,8 @@
     dockFilter: 'all',
     dockType: 'all',
     hoverExternal: null,
+    hoverAnchorLinkedNodes: [],
+    hoverPeek: { savedView: null, activeKind: null, activeId: null, enterTimer: null, leaveTimer: null },
     selectedExternal: null,
     redlineOpen: false,
     showExternalCanvas: false,
@@ -768,7 +770,7 @@
     renderAnchorLinks();
   }
 
-  function focusExternalDownstream(id) {
+  function focusExternalDownstream(id, opts) {
     if (!id) {
       return false;
     }
@@ -776,14 +778,16 @@
       .map((e) => findNode(e.to))
       .filter((x) => x && canvasNode(x.id));
     if (downstream.length) {
-      return focusCanvasNodes(downstream);
+      return focusCanvasNodes(downstream, opts);
     }
     if (state.showExternalCanvas) {
       const self = findNode(id);
       if (self && isCanvasNodeId(self.id)) {
-        const p = self.position || { x: 0, y: 0 };
-        centerOnRect(p.x, p.y, p.x + NODE_W, p.y + NODE_H, Math.max(state.view.scale, 1.05));
-        pulseNode(self.id);
+        const box = nodeBox(self);
+        centerOnRect(box.x, box.y, box.x + box.w, box.y + box.h, adaptiveSingleScale(box), !(opts && opts.animate === false));
+        if (!(opts && opts.pulse === false)) {
+          pulseNode(self.id);
+        }
         return true;
       }
     }
@@ -1045,8 +1049,10 @@
     </div>`;
   }
 
-  function applyTransform() {
-    $('dag-world').style.transform = `translate(${state.view.tx}px, ${state.view.ty}px) scale(${state.view.scale})`;
+  function applyTransform(animate) {
+    const world = $('dag-world');
+    world.classList.toggle('camera-anim', !!animate);
+    world.style.transform = `translate(${state.view.tx}px, ${state.view.ty}px) scale(${state.view.scale})`;
   }
 
   function fitView() {
@@ -1132,7 +1138,24 @@
     pulseElement(document.querySelector(`.dag-node[data-node="${selEsc(id)}"]`));
   }
 
-  function centerOnRect(minX, minY, maxX, maxY, scale) {
+  function nodeBox(n) {
+    const p = (n && n.position) || { x: 0, y: 0 };
+    const el = n ? document.querySelector(`.dag-node[data-node="${selEsc(n.id)}"]`) : null;
+    const w = el && el.offsetWidth > 0 ? el.offsetWidth : NODE_W;
+    const h = el && el.offsetHeight > 0 ? el.offsetHeight : NODE_H;
+    return { x: p.x, y: p.y, w, h };
+  }
+
+  function adaptiveSingleScale(box) {
+    const vp = $('dag-viewport');
+    const vw = vp.clientWidth || 600;
+    const vh = vp.clientHeight || 500;
+    const targetW = (vw * 0.44) / Math.max(180, box.w || NODE_W);
+    const targetH = (vh * 0.48) / Math.max(100, box.h || NODE_H);
+    return Math.max(1.05, Math.min(1.55, Math.min(targetW, targetH)));
+  }
+
+  function centerOnRect(minX, minY, maxX, maxY, scale, animate) {
     const vp = $('dag-viewport');
     const vw = vp.clientWidth || 600;
     const vh = vp.clientHeight || 500;
@@ -1140,7 +1163,7 @@
     state.view.tx = (vw - (maxX - minX) * state.view.scale) / 2 - minX * state.view.scale;
     state.view.ty = (vh - (maxY - minY) * state.view.scale) / 2 - minY * state.view.scale;
     state.view.initialized = true;
-    applyTransform();
+    applyTransform(animate !== false);
   }
 
   function centerOnNode(n, opts) {
@@ -1148,55 +1171,148 @@
       return false;
     }
     const o = opts || {};
+    const box = nodeBox(n);
+    const adaptive = adaptiveSingleScale(box);
     let scale = state.view.scale;
     if (typeof o.scale === 'number') {
       scale = o.scale;
-    } else if (o.zoom !== false && scale < 1.05) {
-      scale = 1.05;
+    } else if (o.zoom !== false) {
+      scale = Math.max(scale, adaptive);
     }
-    const p = n.position || { x: 0, y: 0 };
-    centerOnRect(p.x, p.y, p.x + NODE_W, p.y + NODE_H, scale);
+    centerOnRect(box.x, box.y, box.x + box.w, box.y + box.h, scale, o.animate !== false);
     if (o.pulse !== false) {
       pulseNode(n.id);
     }
     return true;
   }
 
-  function focusCanvasNodes(nodes) {
+  function focusCanvasNodes(nodes, opts) {
+    const o = opts || {};
     const list = (nodes || []).filter((n) => n && canvasNode(n.id));
     if (!list.length) {
       return false;
     }
     if (list.length === 1) {
-      centerOnNode(list[0], { scale: Math.max(state.view.scale, 1.05) });
+      const box = nodeBox(list[0]);
+      const adaptive = adaptiveSingleScale(box);
+      const scale = o.exactAdaptive ? adaptive : Math.max(state.view.scale, adaptive);
+      centerOnNode(list[0], { scale: Math.min(1.8, scale), pulse: o.pulse, animate: o.animate });
       return true;
     }
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const n of list) {
-      const p = n.position || { x: 0, y: 0 };
-      minX = Math.min(minX, p.x);
-      minY = Math.min(minY, p.y);
-      maxX = Math.max(maxX, p.x + NODE_W);
-      maxY = Math.max(maxY, p.y + NODE_H);
+      const box = nodeBox(n);
+      minX = Math.min(minX, box.x);
+      minY = Math.min(minY, box.y);
+      maxX = Math.max(maxX, box.x + box.w);
+      maxY = Math.max(maxY, box.y + box.h);
     }
     const vp = $('dag-viewport');
     const vw = vp.clientWidth || 600;
     const vh = vp.clientHeight || 500;
     const w = Math.max(1, maxX - minX);
     const h = Math.max(1, maxY - minY);
-    const fit = Math.min((vw - 80) / w, (vh - 80) / h);
+    const fit = Math.min((vw - 96) / w, (vh - 96) / h);
     if (fit < 0.78) {
-      centerOnNode(list[0], { scale: 1.05 });
-      for (let i = 1; i < list.length; i++) {
-        pulseNode(list[i].id);
+      const box = nodeBox(list[0]);
+      centerOnNode(list[0], { scale: adaptiveSingleScale(box), pulse: o.pulse, animate: o.animate });
+      if (o.pulse !== false) {
+        for (let i = 1; i < list.length; i++) {
+          pulseNode(list[i].id);
+        }
       }
       return true;
     }
-    centerOnRect(minX, minY, maxX, maxY, Math.max(0.78, Math.min(1.15, fit)));
-    for (const n of list) {
-      pulseNode(n.id);
+    centerOnRect(minX, minY, maxX, maxY, Math.max(0.78, Math.min(1.35, fit)), o.animate !== false);
+    if (o.pulse !== false) {
+      for (const n of list) {
+        pulseNode(n.id);
+      }
     }
     return true;
+  }
+
+  function commitHoverPeek() {
+    const hp = state.hoverPeek;
+    if (hp.enterTimer) {
+      clearTimeout(hp.enterTimer);
+      hp.enterTimer = null;
+    }
+    if (hp.leaveTimer) {
+      clearTimeout(hp.leaveTimer);
+      hp.leaveTimer = null;
+    }
+    hp.savedView = null;
+    hp.activeKind = null;
+    hp.activeId = null;
+    if (state.hoverAnchorLinkedNodes.length) {
+      state.hoverAnchorLinkedNodes = [];
+    }
+  }
+
+  function beginHoverPeek(kind, id, focusFn, delayMs) {
+    const hp = state.hoverPeek;
+    if (hp.leaveTimer) {
+      clearTimeout(hp.leaveTimer);
+      hp.leaveTimer = null;
+    }
+    if (hp.enterTimer) {
+      clearTimeout(hp.enterTimer);
+      hp.enterTimer = null;
+    }
+    if (hp.activeKind === kind && hp.activeId === id) {
+      return;
+    }
+    if (!hp.savedView && state.view.initialized) {
+      hp.savedView = { scale: state.view.scale, tx: state.view.tx, ty: state.view.ty };
+    }
+    const run = () => {
+      hp.enterTimer = null;
+      const moved = focusFn();
+      if (moved) {
+        hp.activeKind = kind;
+        hp.activeId = id;
+      } else if (!hp.activeKind) {
+        hp.savedView = null;
+      }
+    };
+    const wait = hp.activeKind ? 0 : (typeof delayMs === 'number' ? delayMs : 100);
+    if (wait <= 0) {
+      run();
+    } else {
+      hp.enterTimer = setTimeout(run, wait);
+    }
+  }
+
+  function scheduleEndHoverPeek(kind, id, onRestore) {
+    const hp = state.hoverPeek;
+    if (hp.enterTimer) {
+      clearTimeout(hp.enterTimer);
+      hp.enterTimer = null;
+    }
+    if (hp.leaveTimer) {
+      clearTimeout(hp.leaveTimer);
+    }
+    hp.leaveTimer = setTimeout(() => {
+      hp.leaveTimer = null;
+      if (typeof onRestore === 'function') {
+        onRestore();
+      }
+      if (hp.activeKind && (hp.activeKind !== kind || hp.activeId !== id)) {
+        return;
+      }
+      const saved = hp.savedView;
+      hp.savedView = null;
+      hp.activeKind = null;
+      hp.activeId = null;
+      if (saved) {
+        state.view.scale = saved.scale;
+        state.view.tx = saved.tx;
+        state.view.ty = saved.ty;
+        state.view.initialized = true;
+        applyTransform(true);
+      }
+    }, 120);
   }
 
   function clearSelection() {
@@ -1399,7 +1515,7 @@
         linked.add(e.to);
       }
     }
-    const anchorSet = new Set(state.anchorLinkedNodes || []);
+    const anchorSet = new Set(state.hoverAnchorLinkedNodes.length ? state.hoverAnchorLinkedNodes : (state.anchorLinkedNodes || []));
     let anchorOnCanvas = false;
     let anchorExternal = false;
     for (const id of anchorSet) {
@@ -2293,7 +2409,56 @@
       }
       return;
     }
+    commitHoverPeek();
     selectAnchor(block.dataset.anchor, true);
+  });
+
+  $('prd-list').addEventListener('mouseover', (e) => {
+    const block = e.target.closest('.prd-block');
+    if (!block || !block.dataset.anchor) {
+      return;
+    }
+    const anchor = block.dataset.anchor;
+    if (state.hoverPeek.activeKind === 'prd' && state.hoverPeek.activeId === anchor) {
+      return;
+    }
+    const links = anchorLinksFor(anchor);
+    const targets = links.canvas.length
+      ? links.canvas
+      : links.ext.flatMap((ext) => downstreamOfPrerequisite(ext.id).map((edge) => findNode(edge.to)).filter((x) => x && canvasNode(x.id)));
+    if (!targets.length) {
+      return;
+    }
+    const uniq = [];
+    const seen = new Set();
+    for (const t of targets) {
+      if (!seen.has(t.id)) {
+        seen.add(t.id);
+        uniq.push(t);
+      }
+    }
+    beginHoverPeek('prd', anchor, () => {
+      state.hoverAnchorLinkedNodes = links.all.slice();
+      applyExternalHighlight();
+      return focusCanvasNodes(uniq, { exactAdaptive: true, pulse: false, animate: true });
+    }, 140);
+  });
+
+  $('prd-list').addEventListener('mouseout', (e) => {
+    const block = e.target.closest('.prd-block');
+    if (!block || !block.dataset.anchor) {
+      return;
+    }
+    if (e.relatedTarget && block.contains(e.relatedTarget)) {
+      return;
+    }
+    const anchor = block.dataset.anchor;
+    scheduleEndHoverPeek('prd', anchor, () => {
+      if (state.hoverAnchorLinkedNodes.length) {
+        state.hoverAnchorLinkedNodes = [];
+        applyExternalHighlight();
+      }
+    });
   });
 
   $('anchor-links').addEventListener('click', (e) => {
@@ -2304,6 +2469,7 @@
     }
     const chip = e.target.closest('[data-anchor-node]');
     if (chip) {
+      commitHoverPeek();
       focusAnchorNode(chip.dataset.anchorNode);
     }
   });
@@ -2312,12 +2478,14 @@
     if (e.target.closest('.dag-node') || e.target.closest('[data-edge]') || e.button !== 0) {
       return;
     }
+    commitHoverPeek();
     state.pan = { sx: e.clientX, sy: e.clientY, tx: state.view.tx, ty: state.view.ty, moved: false };
     $('dag-viewport').classList.add('panning');
   });
 
   $('dag-viewport').addEventListener('wheel', (e) => {
     e.preventDefault();
+    commitHoverPeek();
     const rect = $('dag-viewport').getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
@@ -2695,6 +2863,7 @@
     }
     const id = card.dataset.extId;
     const n = findNode(id);
+    commitHoverPeek();
     if (isTodoNode(n)) {
       const rect = card.getBoundingClientRect();
       selectExternal(id);
@@ -2720,6 +2889,7 @@
     }
     state.hoverExternal = id;
     applyExternalHighlight();
+    beginHoverPeek('dock', id, () => focusExternalDownstream(id, { exactAdaptive: true, pulse: false, animate: true }), 100);
   });
 
   $('dock-cards').addEventListener('mouseout', (e) => {
@@ -2730,10 +2900,12 @@
     if (e.relatedTarget && card.contains(e.relatedTarget)) {
       return;
     }
-    if (state.hoverExternal === card.dataset.extId) {
+    const id = card.dataset.extId;
+    if (state.hoverExternal === id) {
       state.hoverExternal = null;
       applyExternalHighlight();
     }
+    scheduleEndHoverPeek('dock', id);
   });
 
   $('btn-dock-toggle').onclick = () => {
