@@ -254,6 +254,75 @@ func DiffFile(repoPath, baseRef, path string, context int) ([]Hunk, error) {
 	return files[0].Hunks, nil
 }
 
+// CollectFile returns a FileDiff for one file with contextLines of unified
+// context, falling back to untracked file contents or clean working-tree
+// contents when no diff hunks exist.
+func CollectFile(repoPath, baseRef, relPath string, contextLines int) (*FileDiff, string, error) {
+	if contextLines < 0 {
+		contextLines = 3
+	}
+	if baseRef == "" {
+		baseRef = "HEAD"
+	}
+	base := ResolveBase(repoPath, baseRef)
+	out, err := run(repoPath, "diff", fmt.Sprintf("--unified=%d", contextLines), "--no-color", "--no-ext-diff", "--no-prefix", base, "--", relPath)
+	if err != nil {
+		return nil, base, err
+	}
+	files := parseDiff(out)
+	if len(files) > 0 {
+		fd := files[0]
+		return &fd, base, nil
+	}
+	// File may be untracked or unchanged relative to merge-base.
+	abs := filepath.Join(repoPath, filepath.FromSlash(relPath))
+	data, rerr := os.ReadFile(abs)
+	if rerr != nil {
+		return &FileDiff{Path: relPath, Status: "clean", Hunks: []Hunk{}}, base, nil
+	}
+	if bytes.IndexByte(data, 0) >= 0 {
+		return &FileDiff{Path: relPath, Status: "untracked", Binary: true}, base, nil
+	}
+	// Check if file is untracked by git.
+	untrackedOut, _ := run(repoPath, "ls-files", "--others", "--exclude-standard", "--", relPath)
+	isUntracked := strings.TrimSpace(untrackedOut) != ""
+	rawLines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	if len(data) == 0 {
+		rawLines = nil
+	}
+	fd := &FileDiff{Path: relPath, Status: "clean", Hunks: []Hunk{}}
+	if isUntracked {
+		fd.Status = "untracked"
+		fd.Untracked = true
+		fd.Added = len(rawLines)
+		hLines := make([]string, 0, len(rawLines))
+		for _, l := range rawLines {
+			hLines = append(hLines, "+"+l)
+		}
+		if len(hLines) > 0 {
+			fd.Hunks = append(fd.Hunks, Hunk{
+				OldStart: 0, OldCount: 0, NewStart: 1, NewCount: len(hLines),
+				Header: fmt.Sprintf("@@ -0,0 +1,%d @@ (untracked new file)", len(hLines)),
+				Lines:  hLines,
+			})
+		}
+		return fd, base, nil
+	}
+	// Unchanged working file: return full file as context hunk so the viewer can still inspect it.
+	if len(rawLines) > 0 {
+		hLines := make([]string, 0, len(rawLines))
+		for _, l := range rawLines {
+			hLines = append(hLines, " "+l)
+		}
+		fd.Hunks = append(fd.Hunks, Hunk{
+			OldStart: 1, OldCount: len(hLines), NewStart: 1, NewCount: len(hLines),
+			Header: fmt.Sprintf("@@ -1,%d +1,%d @@ (no diff vs base)", len(hLines), len(hLines)),
+			Lines:  hLines,
+		})
+	}
+	return fd, base, nil
+}
+
 // IsRepo reports whether path is a git worktree.
 func IsRepo(path string) bool {
 	_, err := os.Stat(filepath.Join(path, ".git"))

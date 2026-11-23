@@ -26,17 +26,26 @@ func runStatus(a *Args, rest []string) *Error {
 	if e != nil {
 		return e
 	}
+	text, data, err := buildStatus(ctx)
+	if err != nil {
+		return err
+	}
+	ctx.Emit(text, data)
+	return nil
+}
+
+func buildStatus(ctx *Ctx) (string, map[string]interface{}, *Error) {
 	cfg, cerr := ctx.Store.LoadConfig()
 	if cerr != nil {
-		return fail("%v", cerr)
+		return "", nil, fail("%v", cerr)
 	}
 	dag, derr := ctx.Store.LoadDAG()
 	if derr != nil {
-		return fail("%v", derr)
+		return "", nil, fail("%v", derr)
 	}
 	bindings, berr := ctx.Store.LoadBindings()
 	if berr != nil {
-		return fail("%v", berr)
+		return "", nil, fail("%v", berr)
 	}
 	doc := loadPRDDoc(ctx)
 	rep := audit.Run(cfg, ctx.Root, dag, bindings, audit.Options{All: true})
@@ -279,8 +288,7 @@ func runStatus(a *Args, rest []string) *Error {
 		"dispatch": dispatchPlan,
 		"events":   events,
 	}
-	ctx.Emit(sb.String(), data)
-	return nil
+	return sb.String(), data, nil
 }
 
 func allOutOfScope(ids []string, dag *model.DAG) bool {

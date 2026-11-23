@@ -1,0 +1,261 @@
+/* Standalone browser theme overrides & built-in Code Diff Viewer (reqboard serve). */
+
+:root {
+  --vscode-editor-background: #16181d;
+  --vscode-sideBar-background: #1d2026;
+  --vscode-editorWidget-background: #252932;
+  --vscode-editor-foreground: #d7dce5;
+  --vscode-descriptionForeground: #8b949e;
+  --vscode-panel-border: #303642;
+  --vscode-focusBorder: #3b82f6;
+  --vscode-input-foreground: #e2e8f0;
+  --vscode-input-background: #262b35;
+  --vscode-input-border: #3a4252;
+  --vscode-button-secondaryBackground: #2d3340;
+  --vscode-button-secondaryForeground: #e5e9f0;
+  --vscode-button-secondaryHoverBackground: #394152;
+  --vscode-button-background: #2563eb;
+  --vscode-button-foreground: #ffffff;
+  --vscode-list-hoverBackground: rgba(255, 255, 255, 0.06);
+  --vscode-editor-font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+body.theme-light {
+  --vscode-editor-background: #ffffff;
+  --vscode-sideBar-background: #f6f8fa;
+  --vscode-editorWidget-background: #eef1f5;
+  --vscode-editor-foreground: #1f2328;
+  --vscode-descriptionForeground: #57606a;
+  --vscode-panel-border: #d0d7de;
+  --vscode-focusBorder: #0969da;
+  --vscode-input-foreground: #1f2328;
+  --vscode-input-background: #ffffff;
+  --vscode-input-border: #cbd5e1;
+  --vscode-button-secondaryBackground: #eaeef2;
+  --vscode-button-secondaryForeground: #1f2328;
+  --vscode-button-secondaryHoverBackground: #dce2e8;
+  --vscode-button-background: #0969da;
+  --vscode-button-foreground: #ffffff;
+  --vscode-list-hoverBackground: rgba(9, 105, 218, 0.06);
+  --rb-green: #1a7f37;
+  --rb-red: #cf222e;
+  --rb-orange: #9a6700;
+  --rb-yellow: #bf8700;
+  --rb-blue: #0969da;
+  --rb-gray: #6e7781;
+}
+
+/* ---------- Built-in Code Diff Viewer modal ---------- */
+
+#web-diff-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: rgba(0, 0, 0, 0.56);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+#web-diff-backdrop.hidden {
+  display: none;
+}
+
+#web-diff-modal {
+  width: min(1320px, 95vw);
+  height: min(86vh, 900px);
+  display: flex;
+  flex-direction: column;
+  background: var(--rb-bg);
+  border: 1px solid var(--rb-border);
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.wdiff-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 12px;
+  background: var(--rb-panel);
+  border-bottom: 1px solid var(--rb-border);
+  flex: 0 0 auto;
+}
+
+.wdiff-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wdiff-symbol {
+  color: var(--rb-blue);
+  font-weight: 600;
+}
+
+.wdiff-stat {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--rb-panel-2);
+  border: 1px solid var(--rb-border);
+}
+
+.wdiff-stat .add { color: var(--rb-green); }
+.wdiff-stat .del { color: var(--rb-red); margin-left: 4px; }
+
+.wdiff-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.wdiff-actions button {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+.wdiff-actions button.active {
+  border-color: var(--rb-accent);
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+
+.wdiff-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  tab-size: 4;
+}
+
+.wdiff-empty {
+  padding: 28px;
+  text-align: center;
+  color: var(--rb-muted);
+}
+
+.wdiff-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.wdiff-table td {
+  padding: 0 8px;
+  vertical-align: top;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.wdiff-table .ln {
+  width: 52px;
+  text-align: right;
+  color: var(--rb-muted);
+  user-select: none;
+  border-right: 1px solid var(--rb-border);
+  opacity: 0.78;
+}
+
+.wdiff-table .sig {
+  width: 20px;
+  text-align: center;
+  user-select: none;
+  font-weight: 700;
+}
+
+.wdiff-table tr.hunk td {
+  background: rgba(59, 130, 246, 0.14);
+  color: var(--rb-blue);
+  padding: 4px 10px;
+  font-size: 11px;
+  border-top: 1px solid var(--rb-border);
+  border-bottom: 1px solid var(--rb-border);
+}
+
+.wdiff-table tr.add td {
+  background: rgba(63, 185, 80, 0.14);
+}
+.wdiff-table tr.add .sig { color: var(--rb-green); }
+
+.wdiff-table tr.del td {
+  background: rgba(248, 81, 73, 0.15);
+}
+.wdiff-table tr.del .sig { color: var(--rb-red); }
+
+body.theme-light .wdiff-table tr.add td { background: #dafbe1; }
+body.theme-light .wdiff-table tr.del td { background: #ffebe9; }
+body.theme-light .wdiff-table tr.hunk td { background: #ddf4ff; }
+
+.wdiff-table tr.focus-line td {
+  outline: 1px solid var(--rb-yellow);
+  background: rgba(227, 179, 65, 0.22);
+}
+
+.wdiff-split-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.wdiff-split-table td {
+  padding: 0 8px;
+  vertical-align: top;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.wdiff-split-table .ln {
+  width: 48px;
+  text-align: right;
+  color: var(--rb-muted);
+  user-select: none;
+  border-right: 1px solid var(--rb-border);
+  opacity: 0.78;
+}
+
+.wdiff-split-table .code-left {
+  border-right: 1px solid var(--rb-border);
+}
+
+.wdiff-split-table td.cell-del { background: rgba(248, 81, 73, 0.15); }
+.wdiff-split-table td.cell-add { background: rgba(63, 185, 80, 0.14); }
+.wdiff-split-table td.cell-empty { background: rgba(128, 128, 128, 0.06); }
+body.theme-light .wdiff-split-table td.cell-del { background: #ffebe9; }
+body.theme-light .wdiff-split-table td.cell-add { background: #dafbe1; }
+.wdiff-split-table tr.hunk td {
+  background: rgba(59, 130, 246, 0.14);
+  color: var(--rb-blue);
+  padding: 4px 10px;
+  font-size: 11px;
+  border-top: 1px solid var(--rb-border);
+  border-bottom: 1px solid var(--rb-border);
+}
+.wdiff-split-table tr.focus-line td {
+  background: rgba(227, 179, 65, 0.22);
+}
+
+.wdiff-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 12px;
+  font-size: 11px;
+  color: var(--rb-muted);
+  background: var(--rb-panel);
+  border-top: 1px solid var(--rb-border);
+}

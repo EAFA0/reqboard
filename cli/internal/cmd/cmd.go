@@ -4,6 +4,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"reqboard/internal/model"
 	"reqboard/internal/store"
 )
+
+var emitOut io.Writer
 
 // Error is a CLI failure with an exit code and optional structured payload.
 type Error struct {
@@ -173,19 +176,23 @@ func normalizeRoot(root string) string {
 
 // Emit prints text or JSON.
 func (c *Ctx) Emit(text string, data interface{}) {
+	w := emitOut
+	if w == nil {
+		w = os.Stdout
+	}
 	if c.JSON {
 		out, err := json.MarshalIndent(data, "", "  ")
 		if err != nil {
-			fmt.Printf("{\"ok\":false,\"error\":%q}\n", err.Error())
+			fmt.Fprintf(w, "{\"ok\":false,\"error\":%q}\n", err.Error())
 			return
 		}
-		fmt.Println(string(out))
+		fmt.Fprintln(w, string(out))
 		return
 	}
 	if text != "" {
-		fmt.Print(text)
+		fmt.Fprint(w, text)
 		if !strings.HasSuffix(text, "\n") {
-			fmt.Println()
+			fmt.Fprintln(w)
 		}
 	}
 }
@@ -233,68 +240,20 @@ func Main(argv []string) int {
 		return 0
 	}
 	if argv[0] == "version" || argv[0] == "--version" {
-		fmt.Println("reqboard 0.3.0")
+		fmt.Println("reqboard 0.4.0")
 		return 0
 	}
 
 	cmd := argv[0]
 	rest := argv[1:]
 	a := ParseArgs(rest)
+	if a.Bool("help") {
+		fmt.Print(subcommandHelp(cmd, a.Pos()))
+		return 0
+	}
 	jsonOut := a.Bool("json")
 
-	var err *Error
-	switch cmd {
-	case "init":
-		err = runInit(rest)
-	case "repo":
-		err = runRepo(a, rest)
-	case "prd":
-		err = runPRD(a, rest)
-	case "source":
-		err = runSource(a, rest)
-	case "ref":
-		err = runRef(a, rest)
-	case "plan":
-		err = runPlan(a, rest)
-	case "node":
-		err = runNode(a, rest)
-	case "edge":
-		err = runEdge(a, rest)
-	case "claim":
-		err = runClaim(a, rest)
-	case "bind":
-		err = runBind(a, rest)
-	case "unbind":
-		err = runUnbind(a, rest)
-	case "propose":
-		err = runPropose(a, rest)
-	case "mock":
-		err = runMock(a, rest)
-	case "check":
-		err = runCheck(a, rest)
-	case "review-pack":
-		err = runReviewPack(a, rest)
-	case "done":
-		err = runDone(a, rest)
-	case "dispatch":
-		err = runDispatch(a, rest)
-	case "status":
-		err = runStatus(a, rest)
-	case "filter":
-		err = runFilter(a, rest)
-	case "layout":
-		err = runLayout(a, rest)
-	case "undo":
-		err = runUndo(a, rest)
-	case "redo":
-		err = runRedo(a, rest)
-	case "ops":
-		err = runOps(a, rest)
-	case "todo":
-		err = runTodo(a, rest)
-	default:
-		err = &Error{Code: 2, Msg: fmt.Sprintf("unknown command %q", cmd), Text: usage()}
-	}
+	err := dispatchCommand(cmd, a, rest)
 
 	if err == nil {
 		return 0
@@ -325,6 +284,63 @@ func Main(argv []string) int {
 	return err.Code
 }
 
+func dispatchCommand(cmd string, a *Args, rest []string) *Error {
+	switch cmd {
+	case "init":
+		return runInit(rest)
+	case "repo":
+		return runRepo(a, rest)
+	case "prd":
+		return runPRD(a, rest)
+	case "source":
+		return runSource(a, rest)
+	case "ref":
+		return runRef(a, rest)
+	case "plan":
+		return runPlan(a, rest)
+	case "node":
+		return runNode(a, rest)
+	case "edge":
+		return runEdge(a, rest)
+	case "claim":
+		return runClaim(a, rest)
+	case "bind":
+		return runBind(a, rest)
+	case "unbind":
+		return runUnbind(a, rest)
+	case "propose":
+		return runPropose(a, rest)
+	case "mock":
+		return runMock(a, rest)
+	case "check":
+		return runCheck(a, rest)
+	case "review-pack":
+		return runReviewPack(a, rest)
+	case "done":
+		return runDone(a, rest)
+	case "dispatch":
+		return runDispatch(a, rest)
+	case "status":
+		return runStatus(a, rest)
+	case "filter":
+		return runFilter(a, rest)
+	case "layout":
+		return runLayout(a, rest)
+	case "undo":
+		return runUndo(a, rest)
+	case "redo":
+		return runRedo(a, rest)
+	case "ops":
+		return runOps(a, rest)
+	case "todo":
+		return runTodo(a, rest)
+	case "serve":
+		return runServe(a, rest)
+	default:
+		return &Error{Code: 2, Msg: fmt.Sprintf("unknown command %q", cmd), Text: usage()}
+	}
+}
+
 func usage() string {
 	return `reqboard — 本地需求控制面 CLI
 
@@ -338,7 +354,7 @@ func usage() string {
   reqboard ref add <node_id> --title "..." [--kind url|meeting|decision|chat] [--url "https://..."] [--quote "..."]
   reqboard ref remove <node_id> <ref_id>
   reqboard plan import <plan.json> [--replace] [--no-layout] [--allow-unknown-refs]
-  reqboard node add|update|deprecate|delete|approve|reject|review|fail ...
+  reqboard node list|add|update|deprecate|delete|approve|reject|review|fail ...
   reqboard edge add|update|remove ...
   reqboard claim <id> [--session <sid>] [--lease <repo:glob>...]
   reqboard bind <id> --repo <r> --file <f> --symbol <s> [--partial <hint>] [--role impl|mock|test] --why <reason> [--session <sid>]
@@ -358,7 +374,10 @@ func usage() string {
   reqboard todo add "<title>" [--kind ddl|gateway|flag|other] [--blocks <n1,n2,...>] [--note "..."] [--tag block-start]
   reqboard todo list [--json]
   reqboard layout [--auto] [--include-external]
+  reqboard serve [--root <dir>] [--addr 127.0.0.1:8787] [--port 8787] [--open-cmd "<tpl>"]
   reqboard undo | redo
+
+提示: 运行 reqboard <子命令> --help 查看详细参数（如 reqboard node update --help）。
 
 所有命令支持 --json；写操作自动 flock + 原子 rename + events.jsonl 追加；
 每次写 dag.json / bindings.json / config.json 前自动记录 .reqboard/.undo 快照（最多 20 步）。

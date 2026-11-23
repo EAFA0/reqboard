@@ -12,9 +12,11 @@ import (
 func runNode(a *Args, rest []string) *Error {
 	pos := a.Pos()
 	if len(pos) == 0 {
-		return &Error{Code: 2, Msg: "usage: reqboard node add|update|deprecate|approve|reject|review|fail ..."}
+		return &Error{Code: 2, Msg: "usage: reqboard node list|add|update|deprecate|delete|approve|reject|review|fail ..."}
 	}
 	switch pos[0] {
+	case "list", "ls":
+		return nodeList(a)
 	case "add":
 		return nodeAdd(a, pos[1:])
 	case "update":
@@ -54,6 +56,87 @@ func runNode(a *Args, rest []string) *Error {
 		return nodeFail(a, pos[1])
 	}
 	return &Error{Code: 2, Msg: "unknown node subcommand " + pos[0]}
+}
+
+func nodeList(a *Args) *Error {
+	ctx, e := NewCtx(a)
+	if e != nil {
+		return e
+	}
+	dag, derr := ctx.Store.LoadDAG()
+	if derr != nil {
+		return fail("%v", derr)
+	}
+	bindings, berr := ctx.Store.LoadBindings()
+	if berr != nil {
+		return fail("%v", berr)
+	}
+	wantScope := strings.TrimSpace(a.Str("scope"))
+	wantStatus := strings.TrimSpace(a.Str("status"))
+	onlyStale := a.Bool("stale")
+
+	bindCount := map[string]int{}
+	for _, b := range bindings.Bindings {
+		bindCount[b.NodeID]++
+	}
+	type item struct {
+		ID         string   `json:"id"`
+		Scope      string   `json:"scope"`
+		Status     string   `json:"status"`
+		Stale      bool     `json:"stale"`
+		Hold       bool     `json:"hold"`
+		PRDCount   int      `json:"prd_refs_count"`
+		BindCount  int      `json:"bindings_count"`
+		OpenNotes  int      `json:"open_notes"`
+		PendingMks int      `json:"pending_mocks"`
+		Tags       []string `json:"tags,omitempty"`
+		Title      string   `json:"title"`
+	}
+	var rows []item
+	var sb strings.Builder
+	for _, n := range dag.Nodes {
+		if wantScope != "" && n.Scope != wantScope {
+			continue
+		}
+		if wantStatus != "" && n.Status != wantStatus {
+			continue
+		}
+		if onlyStale && !n.Stale {
+			continue
+		}
+		row := item{
+			ID:         n.ID,
+			Scope:      n.Scope,
+			Status:     n.Status,
+			Stale:      n.Stale,
+			Hold:       n.Hold,
+			PRDCount:   len(n.PRDRefs),
+			BindCount:  bindCount[n.ID],
+			OpenNotes:  len(n.OpenNotes()),
+			PendingMks: len(n.PendingMocks()),
+			Tags:       n.Tags,
+			Title:      n.Title,
+		}
+		rows = append(rows, row)
+		flags := ""
+		if row.Stale {
+			flags += " stale"
+		}
+		if row.Hold {
+			flags += " hold"
+		}
+		if row.OpenNotes > 0 {
+			flags += fmt.Sprintf(" notes=%d", row.OpenNotes)
+		}
+		if row.PendingMks > 0 {
+			flags += fmt.Sprintf(" mocks=%d", row.PendingMks)
+		}
+		sb.WriteString(fmt.Sprintf("%-28s | %-12s | %-17s | prd=%-3d bind=%-3d%s | %s\n",
+			row.ID, row.Scope, row.Status, row.PRDCount, row.BindCount, flags, row.Title))
+	}
+	header := fmt.Sprintf("[REQBOARD NODES] %d/%d 节点\n", len(rows), len(dag.Nodes))
+	ctx.Emit(header+sb.String(), map[string]interface{}{"ok": true, "total": len(dag.Nodes), "count": len(rows), "nodes": rows})
+	return nil
 }
 
 func nodeAdd(a *Args, rest []string) *Error {
@@ -192,6 +275,13 @@ func nodeUpdate(a *Args, id string) *Error {
 			} else if s == model.StatusDeprecated {
 				return fail("请使用 `reqboard node deprecate <id>`，以便保留历史 bindings 做残骸检测")
 			} else {
+				if n.Status == model.StatusDone && s != model.StatusDone && !model.IsPrerequisiteScope(n.Scope) && ctx.Actor != "human" {
+					return &Error{
+						Code: 1,
+						Msg:  "only a human can reopen a done node",
+						Text: fmt.Sprintf("[REQBOARD BLOCKED] 节点 %s 已 done，非人类不能通过 node update 降级重开（-> %s）。\n  -> 如需返工请人类在看板点「打回 + 写批注」或执行 `reqboard node review %s --request-changes --note \"...\" --actor human`。\n", id, s, id),
+					}
+				}
 				n.Status = s
 				changed = append(changed, "status")
 			}
