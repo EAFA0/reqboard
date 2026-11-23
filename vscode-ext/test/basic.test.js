@@ -58,7 +58,7 @@ test('findSymbolLine handles func/method/type', () => {
 test('package.json declares the board command and main entry', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
   assert.strictEqual(pkg.main, './dist/extension.js');
-  assert.strictEqual(pkg.version, '0.4.0');
+  assert.strictEqual(pkg.version, '0.4.1');
   const commands = (pkg.contributes.commands || []).map((c) => c.command);
   assert.ok(commands.includes('reqboard.openBoard'));
   assert.ok(fs.existsSync(path.join(__dirname, '..', 'dist', 'extension.js')));
@@ -159,6 +159,26 @@ test('diffService parses unified hunks and read-only buffers cleanly', () => {
   assert.strictEqual(ro.hunks.length, 1);
   assert.strictEqual(ro.hunks[0].lines.length, 2);
   assert.strictEqual(ro.hunks[0].lines[1].new_line, 2);
+});
+
+test('filterSymbolLocations applies exclude_tests, include_globs and ignore_globs', () => {
+  const locs = [
+    { repo: 'svc', file: 'src/order.go', abs_path: '/a/src/order.go', line: 10, col: 1, preview: '', source: 'vscode-lsp' },
+    { repo: 'svc', file: 'src/order_test.go', abs_path: '/a/src/order_test.go', line: 20, col: 1, preview: '', source: 'vscode-lsp' },
+    { repo: 'svc', file: 'kitex_gen/order.go', abs_path: '/a/kitex_gen/order.go', line: 30, col: 1, preview: '', source: 'vscode-lsp' },
+    { repo: 'api', file: 'handler/order.go', abs_path: '/b/handler/order.go', line: 40, col: 1, preview: '', source: 'vscode-lsp' },
+  ];
+  const cfg = { exclude_tests: true, include_globs: ['src/**', 'api:handler/**'], ignore_globs: ['**/kitex_gen/**'] };
+  const refRes = diffSvc.filterSymbolLocations(locs, cfg, true);
+  assert.strictEqual(refRes.items.length, 2);
+  assert.strictEqual(refRes.filtered, 2);
+  assert.deepStrictEqual(refRes.items.map((x) => x.file), ['src/order.go', 'handler/order.go']);
+
+  // Go-to-Definition preserves sole generated target if filter would leave 0 results.
+  const onlyGen = [locs[2]];
+  const defRes = diffSvc.filterSymbolLocations(onlyGen, cfg, false);
+  assert.strictEqual(defRes.items.length, 1);
+  assert.strictEqual(defRes.filtered, 0);
 });
 
 console.log('all basic extension tests passed');

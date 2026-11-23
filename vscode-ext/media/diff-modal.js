@@ -326,7 +326,7 @@
     });
   }
 
-  function showCandidates(locs, source, x, y, label) {
+  function showCandidates(locs, source, x, y, label, filtered) {
     const box = document.getElementById('rb-diff-candidates');
     if (!box) return;
     const rows = locs.map((loc, idx) => {
@@ -337,7 +337,8 @@
         <span class="wdiff-cand-preview">${esc(loc.preview || '')}</span>
       </button>`;
     }).join('');
-    box.innerHTML = `<div class="wdiff-cand-head"><span>找到 ${locs.length} 处${esc(label)}（${esc(source)}）</span><button data-cand-close style="padding:0 5px">×</button></div>${rows}`;
+    const filtText = filtered > 0 ? ` · 已过滤 ${filtered}` : '';
+    box.innerHTML = `<div class="wdiff-cand-head"><span>找到 ${locs.length} 处${esc(label)}（${esc(source)}${filtText}）</span><button data-cand-close style="padding:0 5px">×</button></div>${rows}`;
     box.classList.remove('hidden');
     const left = Math.max(12, Math.min((x || 120) + 8, window.innerWidth - 580));
     const top = Math.max(12, Math.min((y || 120) + 10, window.innerHeight - 330));
@@ -490,8 +491,10 @@
         return;
       }
       const locs = msg.locations || [];
+      const filtered = Number(msg.filtered || 0);
       if (!locs.length) {
-        toast(`未找到符号 "${p.word}" 的${label}`);
+        const hint = filtered > 0 ? `（${filtered} 处已被单测/Exclude/Include 规则过滤）` : '';
+        toast(`未找到符号 "${p.word}" 的${label}${hint}`);
         return;
       }
       if (!p.findRefs && locs.length === 1) {
@@ -501,7 +504,7 @@
         );
         return;
       }
-      showCandidates(locs.map((l) => ({ ...l, word: p.word })), msg.source || 'vscode-lsp', p.x, p.y, label);
+      showCandidates(locs.map((l) => ({ ...l, word: p.word })), msg.source || 'vscode-lsp', p.x, p.y, label, filtered);
     }
   });
 })();

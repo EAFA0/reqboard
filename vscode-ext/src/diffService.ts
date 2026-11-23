@@ -23,6 +23,125 @@ export interface DiffFileResult {
   hunks: DiffHunk[];
 }
 
+export interface SymbolLocationItem {
+  repo: string;
+  file: string;
+  abs_path: string;
+  line: number;
+  col: number;
+  preview: string;
+  source: string;
+}
+
+export interface DiffFilterConfig {
+  exclude_tests?: boolean;
+  include_globs?: string[];
+  ignore_globs?: string[];
+}
+
+const TEST_FILE_RE = /(?:_test\.go|\.test\.[jt]sx?|\.spec\.[jt]sx?|(?:^|\/)test_[^/]+\.py|_test\.py)$/i;
+
+export function isTestFilePath(file: string): boolean {
+  return TEST_FILE_RE.test(String(file || '').replace(/\\/g, '/'));
+}
+
+function globToRegExp(pattern: string): RegExp {
+  const norm = pattern.replace(/\\/g, '/').trim();
+  let re = '^';
+  for (let i = 0; i < norm.length; i++) {
+    const ch = norm[i];
+    if (ch === '*') {
+      if (norm[i + 1] === '*') {
+        if (norm[i + 2] === '/') {
+          re += '(?:.*/)?';
+          i += 2;
+        } else {
+          re += '.*';
+          i += 1;
+        }
+      } else {
+        re += '[^/]*';
+      }
+    } else if (ch === '?') {
+      re += '[^/]';
+    } else if (/[.+^${}()|[\]\\]/.test(ch)) {
+      re += '\\' + ch;
+    } else {
+      re += ch;
+    }
+  }
+  re += '$';
+  return new RegExp(re);
+}
+
+export function matchesGlobRule(repo: string, file: string, rule: string): boolean {
+  const trimmed = String(rule || '').trim();
+  if (!trimmed) {
+    return false;
+  }
+  const normFile = String(file || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  let targetRepo = '';
+  let pat = trimmed;
+  const colon = trimmed.indexOf(':');
+  if (colon > 0 && !trimmed.slice(0, colon).includes('/')) {
+    targetRepo = trimmed.slice(0, colon).trim();
+    pat = trimmed.slice(colon + 1).trim();
+  }
+  if (targetRepo && targetRepo !== repo) {
+    return false;
+  }
+  const re = globToRegExp(pat);
+  if (re.test(normFile)) {
+    return true;
+  }
+  // Support basename patterns like "*.go" or "*_mock.go" when no slash is in the pattern.
+  if (!pat.includes('/')) {
+    const base = path.posix.basename(normFile);
+    return re.test(base);
+  }
+  return false;
+}
+
+/**
+ * Filter LSP definition / reference locations using ReqBoard's configured
+ * exclude_tests, include_globs and ignore_globs rules.
+ *
+ * For Go-to-Definition (`references === false`), if filtering would discard every
+ * result (for example jumping to a generated Thrift stub or external module),
+ * the original definition list is preserved so navigation still works.
+ */
+export function filterSymbolLocations(
+  locations: SymbolLocationItem[],
+  filter: DiffFilterConfig | undefined,
+  references: boolean
+): { items: SymbolLocationItem[]; filtered: number } {
+  if (!locations.length || !filter) {
+    return { items: locations, filtered: 0 };
+  }
+  const excludeTests = filter.exclude_tests !== false;
+  const includes = (filter.include_globs || []).map((s) => s.trim()).filter(Boolean);
+  const ignores = (filter.ignore_globs || []).map((s) => s.trim()).filter(Boolean);
+
+  const kept: SymbolLocationItem[] = [];
+  for (const loc of locations) {
+    const isExt = loc.repo === '__external__';
+    if (excludeTests && isTestFilePath(loc.file)) {
+      continue;
+    }
+    if (!isExt && ignores.some((g) => matchesGlobRule(loc.repo, loc.file, g))) {
+      continue;
+    }
+    if (!isExt && includes.length > 0 && !includes.some((g) => matchesGlobRule(loc.repo, loc.file, g))) {
+      continue;
+    }
+    kept.push(loc);
+  }
+  if (!references && kept.length === 0) {
+    return { items: locations, filtered: 0 };
+  }
+  return { items: kept, filtered: locations.length - kept.length };
+}
+
 function runGit(repoPath: string, args: string[]): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     execFile(

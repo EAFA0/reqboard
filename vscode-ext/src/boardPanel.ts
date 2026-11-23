@@ -4,7 +4,12 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 
 import { CLIError, ReqboardCLI, gitShow } from './cli';
-import { buildReadOnlyFileDiff, collectFileDiff } from './diffService';
+import {
+  buildReadOnlyFileDiff,
+  collectFileDiff,
+  filterSymbolLocations,
+  SymbolLocationItem,
+} from './diffService';
 import {
   LAUNCHER_STATS_KEY,
   LauncherStatsMap,
@@ -763,7 +768,7 @@ export class BoardPanel {
       const raw = await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(cmdName, docUri, pos);
       const repos = this.resolveConfiguredRepos();
       const seen = new Set<string>();
-      const locations: any[] = [];
+      const rawLocations: SymbolLocationItem[] = [];
       for (const item of raw || []) {
         const isLink = 'targetUri' in item;
         const targetUri = isLink ? item.targetUri : item.uri;
@@ -803,7 +808,7 @@ export class BoardPanel {
         } catch {
           preview = '';
         }
-        locations.push({
+        rawLocations.push({
           repo: matchedRepo,
           file: matchedFile,
           abs_path: targetAbs,
@@ -812,11 +817,22 @@ export class BoardPanel {
           preview,
           source: 'vscode-lsp',
         });
-        if (locations.length >= 50) {
+        if (rawLocations.length >= 200) {
           break;
         }
       }
-      this.post({ type: 'diff.symbols', reqId, source: 'vscode-lsp', locations });
+      const { items: filteredLocations, filtered } = filterSymbolLocations(
+        rawLocations,
+        this.snapshot?.filter,
+        findRefs
+      );
+      this.post({
+        type: 'diff.symbols',
+        reqId,
+        source: 'vscode-lsp',
+        locations: filteredLocations.slice(0, 50),
+        filtered,
+      });
     } catch (e: any) {
       this.post({ type: 'diff.symbols', reqId, error: `VS Code LSP 查询失败: ${e?.message || e}` });
     }
