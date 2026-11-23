@@ -19,14 +19,18 @@ import (
 	"time"
 
 	"reqboard/internal/gitx"
+	"reqboard/internal/lsp"
 	"reqboard/internal/store"
 	"reqboard/internal/webui"
 )
 
 type webServer struct {
-	root    string
-	openCmd string
-	mu      sync.Mutex
+	root          string
+	openCmd       string
+	lsp           *lsp.Manager
+	mu            sync.Mutex
+	extMu         sync.RWMutex
+	externalAllow map[string]bool
 }
 
 func runServe(a *Args, rest []string) *Error {
@@ -47,6 +51,15 @@ func runServe(a *Args, rest []string) *Error {
 		addr = "127.0.0.1:8787"
 	}
 	openCmd := strings.TrimSpace(a.Str("open-cmd"))
+	lspSpec := strings.TrimSpace(a.Str("lsp"))
+	if lspSpec == "" {
+		lspSpec = strings.TrimSpace(os.Getenv("REQBOARD_LSP"))
+	}
+	var lspMgr *lsp.Manager
+	if !strings.EqualFold(lspSpec, "off") && !strings.EqualFold(lspSpec, "none") {
+		lspMgr = lsp.NewManager(lspSpec)
+		defer lspMgr.Shutdown()
+	}
 
 	ln, actualAddr, lerr := listenWithFallback(addr)
 	if lerr != nil {
@@ -54,7 +67,7 @@ func runServe(a *Args, rest []string) *Error {
 	}
 
 	srv := &http.Server{
-		Handler:           newServeHandler(ctx.Root, openCmd),
+		Handler:           newServeHandlerWithLSP(ctx.Root, openCmd, lspMgr),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -62,10 +75,22 @@ func runServe(a *Args, rest []string) *Error {
 	fmt.Printf("[REQBOARD SERVE] %s\n", dag.RequirementName)
 	fmt.Printf("  URL:  %s\n", url)
 	fmt.Printf("  Root: %s\n", ctx.Root)
+	if lspMgr != nil {
+		avail := lspMgr.AvailableLanguages()
+		if len(avail) > 0 {
+			var parts []string
+			for l, c := range avail {
+				parts = append(parts, l+"="+filepath.Base(strings.Fields(c)[0]))
+			}
+			fmt.Printf("  LSP:  %s（其余语言自动回退工作区符号索引）\n", strings.Join(parts, ", "))
+		} else {
+			fmt.Println("  LSP:  未探测到本机 LS，使用内置多语言工作区符号索引（可用 --lsp 指定）")
+		}
+	}
 	if openCmd != "" {
 		fmt.Printf("  IDE:  %s\n", openCmd)
 	}
-	fmt.Println("  按 Ctrl+C 停止（修改 .reqboard/ 自动热刷新，内置 Unified / Split 代码 Diff 视图）")
+	fmt.Println("  按 Ctrl+C 停止（.reqboard/ 热刷新 · 内置 Unified/Split Diff · Cmd/Ctrl+点击跳定义）")
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
@@ -105,7 +130,16 @@ func listenWithFallback(addr string) (net.Listener, string, error) {
 }
 
 func newServeHandler(root, openCmd string) http.Handler {
-	ws := &webServer{root: root, openCmd: openCmd}
+	return newServeHandlerWithLSP(root, openCmd, lsp.NewManager(""))
+}
+
+func newServeHandlerWithLSP(root, openCmd string, lspMgr *lsp.Manager) http.Handler {
+	ws := &webServer{
+		root:          root,
+		openCmd:       openCmd,
+		lsp:           lspMgr,
+		externalAllow: map[string]bool{},
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", ws.handleIndex)
 	mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.FS(webui.Assets()))))
@@ -113,6 +147,7 @@ func newServeHandler(root, openCmd string) http.Handler {
 	mux.HandleFunc("/api/events", ws.handleEvents)
 	mux.HandleFunc("/api/action", ws.handleAction)
 	mux.HandleFunc("/api/diff", ws.handleDiff)
+	mux.HandleFunc("/api/definition", ws.handleDefinition)
 	mux.HandleFunc("/api/open-ide", ws.handleOpenIDE)
 	return mux
 }
@@ -571,6 +606,45 @@ func (ws *webServer) handleDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if repoName == "__external__" {
+		absPath := filepath.Clean(filepath.FromSlash(relFile))
+		ws.extMu.RLock()
+		allowed := ws.externalAllow[absPath]
+		ws.extMu.RUnlock()
+		if !allowed {
+			writeJSON(w, http.StatusForbidden, map[string]interface{}{"ok": false, "error": "external file not allowlisted by LSP"})
+			return
+		}
+		raw, rerr := os.ReadFile(absPath)
+		if rerr != nil {
+			writeJSON(w, http.StatusNotFound, map[string]interface{}{"ok": false, "error": rerr.Error()})
+			return
+		}
+		lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+		wLines := make([]webDiffLine, 0, len(lines))
+		for idx, l := range lines {
+			wLines = append(wLines, webDiffLine{Kind: "ctx", OldLine: idx + 1, NewLine: idx + 1, Text: l})
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"ok":         true,
+			"repo":       "__external__",
+			"file":       absPath,
+			"abs_path":   absPath,
+			"base_ref":   "external",
+			"symbol":     symbol,
+			"focus_line": focusLine,
+			"status":     "external",
+			"added":      0,
+			"deleted":    0,
+			"binary":     false,
+			"hunks": []webDiffHunk{{
+				Header: fmt.Sprintf("@@ -1,%d +1,%d @@ (external dependency — read-only)", len(wLines), len(wLines)),
+				Lines:  wLines,
+			}},
+		})
+		return
+	}
+
 	s, serr := store.Open(ws.root)
 	if serr != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"ok": false, "error": serr.Error()})
@@ -630,6 +704,135 @@ func (ws *webServer) handleDiff(w http.ResponseWriter, r *http.Request) {
 		"deleted":    fd.Deleted,
 		"binary":     fd.Binary,
 		"hunks":      hunks,
+	})
+}
+
+func (ws *webServer) handleDefinition(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	repoName := strings.TrimSpace(q.Get("repo"))
+	relFile := filepath.ToSlash(strings.TrimSpace(q.Get("file")))
+	word := strings.TrimSpace(q.Get("word"))
+	line, _ := strconv.Atoi(q.Get("line"))
+	col, _ := strconv.Atoi(q.Get("col"))
+	if repoName == "" || relFile == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{"ok": false, "error": "repo and file are required"})
+		return
+	}
+
+	s, serr := store.Open(ws.root)
+	if serr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"ok": false, "error": serr.Error()})
+		return
+	}
+	cfg, cerr := s.LoadConfig()
+	if cerr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"ok": false, "error": cerr.Error()})
+		return
+	}
+
+	type repoInfo struct {
+		name string
+		path string
+	}
+	var repos []repoInfo
+	var repoRoots []string
+	var sourceRepoPath string
+	for _, rp := range cfg.Repos {
+		p := rp.Path
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(ws.root, p)
+		}
+		p = filepath.Clean(p)
+		repos = append(repos, repoInfo{name: rp.Name, path: p})
+		repoRoots = append(repoRoots, p)
+		if rp.Name == repoName {
+			sourceRepoPath = p
+		}
+	}
+
+	var absPath string
+	if repoName == "__external__" {
+		absPath = filepath.Clean(filepath.FromSlash(relFile))
+		ws.extMu.RLock()
+		allowed := ws.externalAllow[absPath]
+		ws.extMu.RUnlock()
+		if !allowed {
+			writeJSON(w, http.StatusForbidden, map[string]interface{}{"ok": false, "error": "external file not allowlisted"})
+			return
+		}
+		sourceRepoPath = ws.root
+	} else {
+		if sourceRepoPath == "" {
+			writeJSON(w, http.StatusNotFound, map[string]interface{}{"ok": false, "error": fmt.Sprintf("repo %q 不在 config.json 中", repoName)})
+			return
+		}
+		absPath = filepath.Clean(filepath.Join(sourceRepoPath, filepath.FromSlash(relFile)))
+		if absPath != sourceRepoPath && !strings.HasPrefix(absPath, sourceRepoPath+string(filepath.Separator)) {
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{"ok": false, "error": "invalid file path outside repo"})
+			return
+		}
+	}
+
+	// Prefer the multi-repo workspace root when go.work is present so gopls resolves cross-repo imports.
+	lspRoot := sourceRepoPath
+	if lsp.LanguageForFile(absPath) == "go" {
+		if _, err := os.Stat(filepath.Join(ws.root, "go.work")); err == nil {
+			lspRoot = ws.root
+		}
+	}
+
+	if ws.lsp == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "source": "disabled", "locations": []interface{}{}})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+	locs, source := ws.lsp.Definition(ctx, lspRoot, absPath, line, col, word, repoRoots)
+
+	type outLoc struct {
+		Repo    string `json:"repo"`
+		File    string `json:"file"`
+		AbsPath string `json:"abs_path"`
+		Line    int    `json:"line"`
+		Col     int    `json:"col"`
+		Preview string `json:"preview"`
+		Source  string `json:"source"`
+	}
+	mapped := make([]outLoc, 0, len(locs))
+	for _, loc := range locs {
+		clean := filepath.Clean(loc.AbsPath)
+		matchedRepo := ""
+		matchedFile := ""
+		for _, rp := range repos {
+			if clean == rp.path || strings.HasPrefix(clean, rp.path+string(filepath.Separator)) {
+				if rel, rerr := filepath.Rel(rp.path, clean); rerr == nil {
+					matchedRepo = rp.name
+					matchedFile = filepath.ToSlash(rel)
+					break
+				}
+			}
+		}
+		if matchedRepo == "" {
+			matchedRepo = "__external__"
+			matchedFile = filepath.ToSlash(clean)
+			ws.extMu.Lock()
+			ws.externalAllow[clean] = true
+			ws.extMu.Unlock()
+		}
+		mapped = append(mapped, outLoc{
+			Repo:    matchedRepo,
+			File:    matchedFile,
+			AbsPath: clean,
+			Line:    loc.Line,
+			Col:     loc.Col,
+			Preview: loc.Preview,
+			Source:  loc.Source,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ok":        true,
+		"source":    source,
+		"locations": mapped,
 	})
 }
 

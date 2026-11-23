@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"reqboard/internal/lsp"
 	"reqboard/internal/model"
 	"reqboard/internal/testutil"
 )
@@ -23,7 +24,9 @@ func TestServeEndpointsAndDiffViewer(t *testing.T) {
 	testutil.Write(t, filepath.Join(f.repoPath, "svc/new_helper.go"),
 		"package svc\n\nfunc Helper() int {\n\treturn 42\n}\n")
 
-	srv := httptest.NewServer(newServeHandler(f.root, ""))
+	lspMgr := lsp.NewManager("")
+	defer lspMgr.Shutdown()
+	srv := httptest.NewServer(newServeHandlerWithLSP(f.root, "", lspMgr))
 	defer srv.Close()
 
 	// 1. Index HTML & embedded static assets.
@@ -96,7 +99,7 @@ func TestServeEndpointsAndDiffViewer(t *testing.T) {
 		t.Fatalf("untracked diff = %v", diff)
 	}
 
-	// 5. /api/diff rejects path traversal outside repo.
+	// 5. /api/diff rejects path traversal outside repo and un-allowlisted external files.
 	resp, err = http.Get(srv.URL + "/api/diff?repo=api&file=../../etc/passwd")
 	if err != nil {
 		t.Fatal(err)
@@ -104,6 +107,30 @@ func TestServeEndpointsAndDiffViewer(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("path traversal status = %d, want 400", resp.StatusCode)
+	}
+	resp, err = http.Get(srv.URL + "/api/diff?repo=__external__&file=/etc/passwd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("un-allowlisted external file status = %d, want 403", resp.StatusCode)
+	}
+
+	// 5b. /api/definition resolves symbols (LSP or fallback).
+	resp, err = http.Get(srv.URL + "/api/definition?repo=api&file=svc/order.go&line=3&col=6&word=CancelOrder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var def map[string]interface{}
+	_ = json.NewDecoder(resp.Body).Decode(&def)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || def["ok"] != true {
+		t.Fatalf("definition failed: status=%d body=%v", resp.StatusCode, def)
+	}
+	locs := def["locations"].([]interface{})
+	if len(locs) == 0 {
+		t.Fatalf("definition returned no locations: %v", def)
 	}
 
 	// 6. /api/action creates a node and then undoes it cleanly.

@@ -30,6 +30,8 @@
     data: null,
     mode: localStorage.getItem(DIFF_MODE_KEY) || 'unified',
     fullContext: false,
+    backStack: [],
+    forwardStack: [],
   };
 
   function emitToBoard(msg) {
@@ -136,6 +138,8 @@
       <div class="wdiff-head">
         <div class="wdiff-title" id="wdiff-title">Code Diff</div>
         <div class="wdiff-actions">
+          <button id="wdiff-back" title="返回上一个 Diff（Alt+←）" disabled>← 返回</button>
+          <button id="wdiff-forward" title="前进（Alt+→）" disabled>→</button>
           <button id="wdiff-prev-hunk" title="上一个变更块">↑ 变更</button>
           <button id="wdiff-next-hunk" title="下一个变更块">↓ 变更</button>
           <button id="wdiff-unified" title="Unified 单栏视图">Unified</button>
@@ -150,9 +154,10 @@
       <div class="wdiff-body" id="wdiff-body"></div>
       <div class="wdiff-foot">
         <span id="wdiff-meta"></span>
-        <span>点击行号复制 file:line · Esc 关闭 · Unified / Split 切换</span>
+        <span>Cmd/Ctrl+点击符号跳定义(LSP) · Alt+← 返回 · 点击行号复制 file:line · Esc 关闭</span>
       </div>
-    </div>`;
+    </div>
+    <div id="wdiff-candidates" class="hidden"></div>`;
     document.body.appendChild(backdrop);
 
     backdrop.addEventListener('click', (e) => {
@@ -161,6 +166,8 @@
       }
     });
     document.getElementById('wdiff-close').onclick = closeDiffModal;
+    document.getElementById('wdiff-back').onclick = () => navigateDiffHistory(-1);
+    document.getElementById('wdiff-forward').onclick = () => navigateDiffHistory(1);
     let hunkIdx = -1;
     const jumpHunk = (delta) => {
       const hunks = [...document.querySelectorAll('#wdiff-body tr.hunk')];
@@ -171,14 +178,42 @@
     document.getElementById('wdiff-prev-hunk').onclick = () => jumpHunk(-1);
     document.getElementById('wdiff-next-hunk').onclick = () => jumpHunk(1);
     document.getElementById('wdiff-body').addEventListener('click', async (e) => {
+      hideCandidates();
       const ln = e.target.closest('td.ln');
-      if (!ln) return;
-      const lineNo = Number(ln.textContent.trim() || 0);
-      if (!lineNo || !diffState.data) return;
-      const loc = `${diffState.data.file}:${lineNo}`;
-      await copyClipboard(loc);
-      emitToBoard({ type: 'toast', message: '已复制 ' + loc });
+      if (ln) {
+        const lineNo = Number(ln.textContent.trim() || 0);
+        if (!lineNo || !diffState.data) return;
+        const loc = `${diffState.data.file}:${lineNo}`;
+        await copyClipboard(loc);
+        emitToBoard({ type: 'toast', message: '已复制 ' + loc });
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey) {
+        const codeCell = e.target.closest('td.code, td.code-left, td.code-right');
+        if (!codeCell || !diffState.data) return;
+        e.preventDefault();
+        void handleCodeJump(codeCell, e);
+      }
     });
+    const setModClass = (on) => {
+      const m = document.getElementById('web-diff-modal');
+      if (m) m.classList.toggle('mod-key', !!on);
+    };
+    document.addEventListener('keydown', (e) => {
+      if (!diffState.open) return;
+      if (e.key === 'Meta' || e.key === 'Control') setModClass(true);
+      if (e.altKey && e.key === 'ArrowLeft') {
+        e.preventDefault();
+        navigateDiffHistory(-1);
+      } else if (e.altKey && e.key === 'ArrowRight') {
+        e.preventDefault();
+        navigateDiffHistory(1);
+      }
+    });
+    document.addEventListener('keyup', (e) => {
+      if (e.key === 'Meta' || e.key === 'Control') setModClass(false);
+    });
+    window.addEventListener('blur', () => setModClass(false));
     document.getElementById('wdiff-unified').onclick = () => {
       diffState.mode = 'unified';
       localStorage.setItem(DIFF_MODE_KEY, 'unified');
@@ -232,27 +267,197 @@
     }, true);
   }
 
+  function hideCandidates() {
+    const el = document.getElementById('wdiff-candidates');
+    if (el) {
+      el.classList.add('hidden');
+      el.innerHTML = '';
+    }
+  }
+
   function closeDiffModal() {
+    hideCandidates();
     diffState.open = false;
+    diffState.backStack = [];
+    diffState.forwardStack = [];
     const el = document.getElementById('web-diff-backdrop');
     if (el) {
       el.classList.add('hidden');
     }
   }
 
-  async function loadDiff(req) {
+  function updateNavButtons() {
+    const back = document.getElementById('wdiff-back');
+    const fwd = document.getElementById('wdiff-forward');
+    if (back) {
+      back.disabled = diffState.backStack.length === 0;
+      back.textContent = diffState.backStack.length ? `← 返回 (${diffState.backStack.length})` : '← 返回';
+    }
+    if (fwd) {
+      fwd.disabled = diffState.forwardStack.length === 0;
+    }
+  }
+
+  function navigateDiffHistory(dir) {
+    hideCandidates();
+    const body = document.getElementById('wdiff-body');
+    const curScroll = body ? body.scrollTop : 0;
+    if (dir < 0 && diffState.backStack.length > 0) {
+      if (diffState.req) {
+        diffState.forwardStack.push({ req: diffState.req, fullContext: diffState.fullContext, scrollTop: curScroll });
+      }
+      const prev = diffState.backStack.pop();
+      diffState.fullContext = !!prev.fullContext;
+      void loadDiff(prev.req, { pushHistory: false, restoreScroll: prev.scrollTop });
+    } else if (dir > 0 && diffState.forwardStack.length > 0) {
+      if (diffState.req) {
+        diffState.backStack.push({ req: diffState.req, fullContext: diffState.fullContext, scrollTop: curScroll });
+      }
+      const next = diffState.forwardStack.pop();
+      diffState.fullContext = !!next.fullContext;
+      void loadDiff(next.req, { pushHistory: false, restoreScroll: next.scrollTop });
+    }
+  }
+
+  function extractClickedPosition(cell, ev) {
+    const text = cell.textContent || '';
+    let offset = 0;
+    if (document.caretRangeFromPoint) {
+      const range = document.caretRangeFromPoint(ev.clientX, ev.clientY);
+      if (range && cell.contains(range.startContainer)) {
+        offset = range.startOffset;
+      }
+    } else if (document.caretPositionFromPoint) {
+      const pos = document.caretPositionFromPoint(ev.clientX, ev.clientY);
+      if (pos && cell.contains(pos.offsetNode)) {
+        offset = pos.offset;
+      }
+    }
+    const isWord = (ch) => /[A-Za-z0-9_]/.test(ch);
+    let start = Math.min(offset, Math.max(0, text.length - 1));
+    if (start > 0 && !isWord(text[start]) && isWord(text[start - 1])) {
+      start--;
+    }
+    let end = start;
+    while (start > 0 && isWord(text[start - 1])) start--;
+    while (end < text.length && isWord(text[end])) end++;
+    const word = text.slice(start, end);
+    return { col: start + 1, word };
+  }
+
+  function showCandidates(locs, source, x, y) {
+    const box = document.getElementById('wdiff-candidates');
+    if (!box) return;
+    const rows = locs.map((loc, idx) => {
+      const label = loc.repo === '__external__' ? loc.file : `${loc.repo}:${loc.file}`;
+      return `<button class="wdiff-cand-item" data-cand-idx="${idx}">
+        <span class="wdiff-cand-loc">${esc(label)}:${loc.line}</span>
+        <span class="wdiff-cand-preview">${esc(loc.preview || '')}</span>
+      </button>`;
+    }).join('');
+    box.innerHTML = `<div class="wdiff-cand-head"><span>找到 ${locs.length} 处定义（${esc(source)}）</span><button data-cand-close style="padding:0 5px">×</button></div>${rows}`;
+    box.classList.remove('hidden');
+    const left = Math.max(12, Math.min(x + 8, window.innerWidth - 580));
+    const top = Math.max(12, Math.min(y + 10, window.innerHeight - 330));
+    box.style.left = left + 'px';
+    box.style.top = top + 'px';
+    box.onclick = (ev) => {
+      if (ev.target.closest('[data-cand-close]')) {
+        hideCandidates();
+        return;
+      }
+      const btn = ev.target.closest('[data-cand-idx]');
+      if (!btn) return;
+      const loc = locs[Number(btn.dataset.candIdx)];
+      hideCandidates();
+      if (loc) {
+        jumpToLocation(loc);
+      }
+    };
+  }
+
+  function jumpToLocation(loc) {
+    const nextReq = {
+      repo: loc.repo,
+      file: loc.file,
+      symbol: loc.word || '',
+      line: loc.line || 1,
+    };
+    // Keep full context when jumping into a specific line so the definition is always visible.
+    void loadDiff(nextReq, { pushHistory: true, forceFullContextIfClean: true });
+  }
+
+  async function handleCodeJump(cell, ev) {
+    const tr = cell.closest('tr');
+    const newLine = Number((tr && tr.dataset && tr.dataset.newLine) || 0);
+    if (!newLine) {
+      emitToBoard({ type: 'toast', message: '删除行没有工作区行号，请在保留或新增行上 Cmd/Ctrl+点击' });
+      return;
+    }
+    const { col, word } = extractClickedPosition(cell, ev);
+    if (!word) {
+      return;
+    }
+    const d = diffState.data;
+    const params = new URLSearchParams({
+      repo: d.repo || '',
+      file: d.file || '',
+      line: String(newLine),
+      col: String(col),
+      word,
+    });
+    try {
+      const resp = await fetch('/api/definition?' + params.toString(), { cache: 'no-store' });
+      const res = await resp.json();
+      if (!resp.ok || res.ok === false) {
+        emitToBoard({ type: 'error', message: res.error || '跳转定义失败' });
+        return;
+      }
+      const locs = res.locations || [];
+      if (!locs.length) {
+        emitToBoard({ type: 'toast', message: `未找到符号 "${word}" 的定义` });
+        return;
+      }
+      if (locs.length === 1) {
+        jumpToLocation({ ...locs[0], word });
+        emitToBoard({ type: 'toast', message: `已跳转 ${word}（${res.source}）` });
+        return;
+      }
+      showCandidates(locs.map((l) => ({ ...l, word })), res.source || 'lsp', ev.clientX, ev.clientY);
+    } catch (err) {
+      emitToBoard({ type: 'error', message: 'LSP 跳转请求失败: ' + (err && err.message ? err.message : err) });
+    }
+  }
+
+  async function loadDiff(req, opts) {
+    const o = opts || {};
     ensureDiffModal();
+    hideCandidates();
+    if (o.pushHistory && diffState.open && diffState.req) {
+      const body = document.getElementById('wdiff-body');
+      diffState.backStack.push({
+        req: diffState.req,
+        fullContext: diffState.fullContext,
+        scrollTop: body ? body.scrollTop : 0,
+      });
+      diffState.forwardStack = [];
+    } else if (!o.pushHistory && !diffState.open) {
+      diffState.backStack = [];
+      diffState.forwardStack = [];
+    }
     diffState.open = true;
     diffState.req = req;
+    updateNavButtons();
     const backdrop = document.getElementById('web-diff-backdrop');
     backdrop.classList.remove('hidden');
     document.getElementById('wdiff-body').innerHTML = '<div class="wdiff-empty">正在读取 git diff…</div>';
+    const wantFull = diffState.fullContext || (o.forceFullContextIfClean && req.line > 0);
     const params = new URLSearchParams({
       repo: req.repo || '',
       file: req.file || '',
       symbol: req.symbol || '',
       line: String(req.line || 0),
-      context: diffState.fullContext ? '99999' : '5',
+      context: wantFull ? '99999' : '5',
     });
     try {
       const resp = await fetch('/api/diff?' + params.toString(), { cache: 'no-store' });
@@ -262,7 +467,7 @@
         return;
       }
       diffState.data = data;
-      renderDiffModal();
+      renderDiffModal(o.restoreScroll);
     } catch (e) {
       document.getElementById('wdiff-body').innerHTML = `<div class="wdiff-empty">读取 diff 失败：${esc(e && e.message ? e.message : e)}</div>`;
     }
@@ -331,12 +536,14 @@
     return `<table class="wdiff-split-table"><colgroup><col style="width:48px"><col style="width:calc(50% - 48px)"><col style="width:48px"><col style="width:calc(50% - 48px)"></colgroup><tbody>${rows}</tbody></table>`;
   }
 
-  function renderDiffModal() {
+  function renderDiffModal(restoreScroll) {
     const d = diffState.data;
     if (!d) return;
+    updateNavButtons();
     const sym = d.symbol ? `<span class="wdiff-symbol">:: ${esc(d.symbol)}</span>` : '';
     const stat = `<span class="wdiff-stat" title="整个文件的改动行数（列表里显示的是单个符号的改动行数）">文件 <span class="add">+${d.added || 0}</span><span class="del">-${d.deleted || 0}</span></span>`;
-    document.getElementById('wdiff-title').innerHTML = `${esc(d.repo)}:${esc(d.file)} ${stat} ${sym}`;
+    const fileLabel = d.repo === '__external__' ? d.file : `${d.repo}:${d.file}`;
+    document.getElementById('wdiff-title').innerHTML = `${esc(fileLabel)} ${stat} ${sym}`;
     document.getElementById('wdiff-unified').classList.toggle('active', diffState.mode !== 'split');
     document.getElementById('wdiff-split').classList.toggle('active', diffState.mode === 'split');
     document.getElementById('wdiff-context').classList.toggle('active', diffState.fullContext);
@@ -358,6 +565,10 @@
       ? renderSplit(hunks, d.focus_line || 0)
       : renderUnified(hunks, d.focus_line || 0);
 
+    if (typeof restoreScroll === 'number') {
+      body.scrollTop = restoreScroll;
+      return;
+    }
     const focusEl = body.querySelector('.focus-line');
     if (focusEl && typeof focusEl.scrollIntoView === 'function') {
       focusEl.scrollIntoView({ block: 'center' });

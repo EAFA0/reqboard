@@ -86,11 +86,13 @@ func subcommandHelp(cmd string, pos []string) string {
 		return `用法: reqboard dispatch [--max-parallel N] [--session <sid>] [--json]
 `
 	case "serve":
-		return `用法: reqboard serve [--root <dir>] [--addr 127.0.0.1:8787] [--port 8787] [--open-cmd "<cmd>"]
-启动本地 Web 三栏看板（内嵌浏览器代码 Diff 查看器，支持 GoLand / VS Code / 任意 IDE 或纯终端用户）。
+		return `用法: reqboard serve [--root <dir>] [--addr 127.0.0.1:8787] [--port 8787] [--lsp "<spec>"] [--open-cmd "<cmd>"]
+启动本地 Web 三栏看板（内嵌浏览器代码 Diff 查看器与多语言 LSP 符号跳转，支持 GoLand / VS Code / 任意 IDE 或纯终端用户）。
 参数:
   --addr <host:port>   监听地址（默认 127.0.0.1:8787；端口冲突时自动顺延）
   --port <N>           简写监听端口（等价于 --addr 127.0.0.1:<N>）
+  --lsp <spec>         可选：自定义语言服务器映射（默认自动探测 gopls / tsserver / pyright / rust-analyzer / clangd / jdtls，缺省回退工作区符号索引；传 off 禁用 LSP）
+                       例如: --lsp "go=gopls,py=pyright-langserver --stdio,ts=typescript-language-server --stdio"
   --open-cmd <tpl>     可选：点击「在 IDE 打开」时执行的本机命令模板，支持 {file} 和 {line}
                        例如: --open-cmd "goland --line {line} {file}" 或 "code --goto {file}:{line}"
 `
