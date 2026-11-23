@@ -85,6 +85,15 @@ func subcommandHelp(cmd string, pos []string) string {
 	case "dispatch":
 		return `用法: reqboard dispatch [--max-parallel N] [--session <sid>] [--json]
 `
+	case "prd":
+		return `用法: reqboard prd init <src.md> [--force] [--json]
+      reqboard prd sync <new.md> [--json]
+      reqboard prd fetch <feishu-wiki-or-docx-url> [--force] [--json]
+      reqboard prd ignore <p:x> [<p:y>...] [--undo] [--json]
+说明: prd fetch 内置飞书/Lark 文档清洗与本地资产下载（图片、画板预览+拓扑、嵌入表与同步块），自动 init 或增量 sync。
+`
+	case "source":
+		return sourceUsage()
 	case "serve":
 		return `用法: reqboard serve [--root <dir>] [--addr 127.0.0.1:8787] [--port 8787] [--lsp "<spec>"] [--open-cmd "<cmd>"]
 启动本地 Web 三栏看板（内嵌浏览器代码 Diff 查看器与多语言 LSP 符号跳转，支持 GoLand / VS Code / 任意 IDE 或纯终端用户）。

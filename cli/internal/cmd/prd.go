@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"reqboard/internal/fetch"
 	"reqboard/internal/model"
 	"reqboard/internal/plan"
 	"reqboard/internal/prd"
@@ -14,7 +15,7 @@ import (
 func runPRD(a *Args, rest []string) *Error {
 	pos := a.Pos()
 	if len(pos) == 0 {
-		return &Error{Code: 2, Msg: "usage: reqboard prd init|sync|ignore ...", Text: "用法: reqboard prd init <src.md> | prd sync <new.md> | prd ignore <p:x> [<p:y>...]"}
+		return &Error{Code: 2, Msg: "usage: reqboard prd init|sync|fetch|ignore ...", Text: "用法: reqboard prd init <src.md> | prd sync <new.md> | prd fetch <feishu-url> | prd ignore <p:x> [<p:y>...]"}
 	}
 	switch pos[0] {
 	case "init":
@@ -27,6 +28,11 @@ func runPRD(a *Args, rest []string) *Error {
 			return fail("usage: reqboard prd sync <new.md>")
 		}
 		return prdSync(a, pos[1])
+	case "fetch":
+		if len(pos) < 2 {
+			return fail("usage: reqboard prd fetch <feishu-wiki-or-docx-url> [--force]")
+		}
+		return prdFetch(a, pos[1])
 	case "ignore", "unignore":
 		if len(pos) < 2 {
 			return fail("usage: reqboard prd ignore <p:x> [<p:y>...] [--undo]")
@@ -34,7 +40,27 @@ func runPRD(a *Args, rest []string) *Error {
 		undo := pos[0] == "unignore" || a.Bool("undo")
 		return prdIgnoreMany(a, pos[1:], undo)
 	}
-	return &Error{Code: 2, Msg: "unknown prd subcommand " + pos[0], Text: "用法: reqboard prd init|sync|ignore"}
+	return &Error{Code: 2, Msg: "unknown prd subcommand " + pos[0], Text: "用法: reqboard prd init|sync|fetch|ignore"}
+}
+
+func prdFetch(a *Args, rawURL string) *Error {
+	ctx, e := NewCtx(a)
+	if e != nil {
+		return e
+	}
+	res, ferr := fetch.RunLark(rawURL, ctx.Store.Dir())
+	if ferr != nil {
+		return fail("prd fetch: %v", ferr)
+	}
+	defer res.CleanupIntermediate()
+	if summary := res.MediaSummary(); summary != "" {
+		fmt.Fprintf(os.Stderr, "[REQBOARD PRD FETCH] 已下载本地资产：%s\n", summary)
+	}
+	old, err := ctx.Store.ReadFile("prd.md")
+	if err == nil && strings.TrimSpace(string(old)) != "" && !a.Bool("force") {
+		return prdSync(a, res.CleanMDPath)
+	}
+	return prdInit(a, res.CleanMDPath)
 }
 
 func prdInit(a *Args, srcPath string) *Error {

@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 
+	"reqboard/internal/fetch"
 	"reqboard/internal/model"
 	"reqboard/internal/prd"
 )
@@ -50,6 +52,11 @@ func runSource(a *Args, rest []string) *Error {
 			return fail("usage: reqboard source sync <id> <new_file.md>")
 		}
 		return sourceSync(a, pos[1], pos[2])
+	case "fetch":
+		if len(pos) < 2 {
+			return fail("usage: reqboard source fetch <feishu-url> --id <slug> [--title \"...\"] [--kind doc] --actor human")
+		}
+		return sourceFetch(a, pos[1])
 	case "list", "ls":
 		return sourceList(a)
 	case "remove", "rm":
@@ -63,12 +70,53 @@ func runSource(a *Args, rest []string) *Error {
 
 func sourceUsage() string {
 	return `用法:
-  reqboard source add <file.md|-> --id <slug> [--title "..."] [--kind doc|meeting|chat|spec] [--url "https://..."]
-  reqboard source add --text "粘贴的会议纪要/群聊拍板" --id <slug> [--title "..."] [--kind ...]
-  reqboard source sync <id> <new_file.md>
+  reqboard source add <file.md|-> --id <slug> [--title "..."] [--kind doc|meeting|chat|spec] [--url "https://..."] --actor human
+  reqboard source add --text "粘贴的会议纪要/群聊拍板" --id <slug> [--title "..."] [--kind ...] --actor human
+  reqboard source fetch <feishu-url> --id <slug> [--title "..."] [--kind doc] --actor human
+  reqboard source sync <id> <new_file.md> --actor human
   reqboard source list [--json]
-  reqboard source remove <id> [--force]
+  reqboard source remove <id> [--force] --actor human
 `
+}
+
+func sourceFetch(a *Args, rawURL string) *Error {
+	ctx, e := NewCtx(a)
+	if e != nil {
+		return e
+	}
+	if ge := requireHumanSourceActor(ctx, "fetch"); ge != nil {
+		return ge
+	}
+	id := strings.TrimSpace(a.Str("id"))
+	if id == "" {
+		return fail("--id is required (slug, e.g. partner-side-live)")
+	}
+	if !validSourceID(id) {
+		return fail("invalid --id %q (want [A-Za-z0-9][A-Za-z0-9_-]*, and not reserved %q)", id, prd.DefaultPrefix)
+	}
+	sourcesDir := filepath.Join(ctx.Store.Dir(), "sources")
+	res, ferr := fetch.RunLark(rawURL, sourcesDir)
+	if ferr != nil {
+		return fail("source fetch: %v", ferr)
+	}
+	defer res.CleanupIntermediate()
+	if summary := res.MediaSummary(); summary != "" {
+		fmt.Fprintf(os.Stderr, "[REQBOARD SOURCE FETCH] %s 已下载本地资产：%s\n", id, summary)
+	}
+	dag, derr := ctx.Store.LoadDAG()
+	if derr != nil {
+		return fail("%v", derr)
+	}
+	if dag.Source(id) != nil {
+		return sourceSync(a, id, res.CleanMDPath)
+	}
+	if !a.Has("url") {
+		if a.flags == nil {
+			a.flags = map[string][]string{}
+		}
+		a.flags["url"] = []string{rawURL}
+	}
+	return sourceAdd(a, []string{res.CleanMDPath})
 }
 
 func readSourceInput(a *Args, pos []string) ([]byte, *Error) {
