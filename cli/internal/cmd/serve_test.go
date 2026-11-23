@@ -133,6 +133,21 @@ func TestServeEndpointsAndDiffViewer(t *testing.T) {
 		t.Fatalf("definition returned no locations: %v", def)
 	}
 
+	// 5c. /api/references resolves symbol usages.
+	resp, err = http.Get(srv.URL + "/api/references?repo=api&file=svc/order.go&line=1&col=1&word=CreateOrder")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refs map[string]interface{}
+	_ = json.NewDecoder(resp.Body).Decode(&refs)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || refs["ok"] != true {
+		t.Fatalf("references failed: status=%d body=%v", resp.StatusCode, refs)
+	}
+	if len(refs["locations"].([]interface{})) == 0 {
+		t.Fatalf("references returned no locations: %v", refs)
+	}
+
 	// 6. /api/action creates a node and then undoes it cleanly.
 	postAction := func(payload map[string]interface{}) map[string]interface{} {
 		raw, _ := json.Marshal(payload)

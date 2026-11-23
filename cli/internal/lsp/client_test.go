@@ -75,4 +75,12 @@ func TestRealGoplsWhenInstalled(t *testing.T) {
 	if filepath.Base(locs[0].AbsPath) != "types.go" || locs[0].Line != 3 {
 		t.Fatalf("gopls location = %+v, want types.go:3", locs[0])
 	}
+
+	refs, refSrc := m.References(ctx, tmp, filepath.Join(tmp, "types.go"), 3, 7, "StatusReady", []string{tmp})
+	if refSrc != "lsp:go" || len(refs) == 0 {
+		t.Fatalf("gopls references failed: src=%s refs=%+v", refSrc, refs)
+	}
+	if filepath.Base(refs[0].AbsPath) != "main.go" || refs[0].Line != 4 {
+		t.Fatalf("gopls reference = %+v, want main.go:4", refs[0])
+	}
 }

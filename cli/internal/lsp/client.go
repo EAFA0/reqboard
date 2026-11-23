@@ -95,6 +95,26 @@ func (m *Manager) Definition(ctx context.Context, workspaceRoot, absPath string,
 	return nil, "none"
 }
 
+// References resolves usages of the symbol at (absPath, line 1-based, col 1-based).
+func (m *Manager) References(ctx context.Context, workspaceRoot, absPath string, line, col int, word string, repoRoots []string) ([]Location, string) {
+	lang := LanguageForFile(absPath)
+	if lang != "" {
+		if srv := m.getOrStart(workspaceRoot, lang); srv != nil {
+			locs, err := srv.references(ctx, absPath, line, col)
+			if err == nil && len(locs) > 0 {
+				return locs, "lsp:" + lang
+			}
+		}
+	}
+	if strings.TrimSpace(word) != "" {
+		locs := fallbackReferences(word, absPath, line, repoRoots)
+		if len(locs) > 0 {
+			return locs, "fallback"
+		}
+	}
+	return nil, "none"
+}
+
 // AvailableLanguages reports detected or configured language server commands.
 func (m *Manager) AvailableLanguages() map[string]string {
 	out := map[string]string{}
@@ -506,6 +526,29 @@ func (s *server) definition(ctx context.Context, absPath string, line, col int) 
 	return parseDefinitionResult(res), nil
 }
 
+func (s *server) references(ctx context.Context, absPath string, line, col int) ([]Location, error) {
+	if err := s.ensureOpen(absPath); err != nil {
+		return nil, err
+	}
+	l := line - 1
+	if l < 0 {
+		l = 0
+	}
+	c := col - 1
+	if c < 0 {
+		c = 0
+	}
+	res, err := s.call(ctx, "textDocument/references", map[string]interface{}{
+		"textDocument": map[string]string{"uri": fileURI(absPath)},
+		"position":     map[string]int{"line": l, "character": c},
+		"context":      map[string]bool{"includeDeclaration": false},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return parseDefinitionResult(res), nil
+}
+
 func parseDefinitionResult(raw json.RawMessage) []Location {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || string(trimmed) == "null" {
@@ -683,6 +726,77 @@ func fallbackDefinition(word, currentFile string, repoRoots []string) []Location
 			}
 			ext := strings.ToLower(filepath.Ext(p))
 			switch ext {
+			case ".go", ".thrift", ".proto", ".ts", ".tsx", ".js", ".jsx", ".py", ".rs", ".java", ".c", ".h", ".cpp", ".hpp":
+				scanFile(p)
+			}
+			return nil
+		})
+	}
+	return out
+}
+
+func fallbackReferences(word, currentFile string, currentLine int, repoRoots []string) []Location {
+	name := strings.TrimSpace(word)
+	if len(name) < 2 {
+		return nil
+	}
+	if i := strings.LastIndex(name, "."); i >= 0 {
+		name = name[i+1:]
+	}
+	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\b`)
+	var out []Location
+	seen := map[string]bool{}
+	scanFile := func(p string) {
+		if len(out) >= 40 {
+			return
+		}
+		raw, err := os.ReadFile(p)
+		if err != nil || len(raw) > 512*1024 || bytes.IndexByte(raw, 0) >= 0 {
+			return
+		}
+		for idx, line := range strings.Split(string(raw), "\n") {
+			if p == currentFile && idx+1 == currentLine {
+				continue
+			}
+			if re.MatchString(line) {
+				key := fmt.Sprintf("%s:%d", p, idx+1)
+				if !seen[key] {
+					seen[key] = true
+					out = append(out, Location{
+						AbsPath: p,
+						Line:    idx + 1,
+						Col:     1,
+						Preview: strings.TrimSpace(line),
+						Source:  "fallback",
+					})
+				}
+				if len(out) >= 40 {
+					return
+				}
+			}
+		}
+	}
+	if currentFile != "" {
+		scanFile(currentFile)
+	}
+	for _, root := range repoRoots {
+		if len(out) >= 40 {
+			break
+		}
+		_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+			if err != nil || len(out) >= 40 {
+				return filepath.SkipDir
+			}
+			if d.IsDir() {
+				if skipDirs[d.Name()] {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if p == currentFile {
+				return nil
+			}
+			switch strings.ToLower(filepath.Ext(p)) {
 			case ".go", ".thrift", ".proto", ".ts", ".tsx", ".js", ".jsx", ".py", ".rs", ".java", ".c", ".h", ".cpp", ".hpp":
 				scanFile(p)
 			}

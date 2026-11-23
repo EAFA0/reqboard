@@ -148,6 +148,7 @@ func newServeHandlerWithLSP(root, openCmd string, lspMgr *lsp.Manager) http.Hand
 	mux.HandleFunc("/api/action", ws.handleAction)
 	mux.HandleFunc("/api/diff", ws.handleDiff)
 	mux.HandleFunc("/api/definition", ws.handleDefinition)
+	mux.HandleFunc("/api/references", ws.handleReferences)
 	mux.HandleFunc("/api/open-ide", ws.handleOpenIDE)
 	return mux
 }
@@ -708,6 +709,14 @@ func (ws *webServer) handleDiff(w http.ResponseWriter, r *http.Request) {
 }
 
 func (ws *webServer) handleDefinition(w http.ResponseWriter, r *http.Request) {
+	ws.handleSymbolLookup(w, r, false)
+}
+
+func (ws *webServer) handleReferences(w http.ResponseWriter, r *http.Request) {
+	ws.handleSymbolLookup(w, r, true)
+}
+
+func (ws *webServer) handleSymbolLookup(w http.ResponseWriter, r *http.Request, references bool) {
 	q := r.URL.Query()
 	repoName := strings.TrimSpace(q.Get("repo"))
 	relFile := filepath.ToSlash(strings.TrimSpace(q.Get("file")))
@@ -787,7 +796,13 @@ func (ws *webServer) handleDefinition(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 	defer cancel()
-	locs, source := ws.lsp.Definition(ctx, lspRoot, absPath, line, col, word, repoRoots)
+	var locs []lsp.Location
+	var source string
+	if references {
+		locs, source = ws.lsp.References(ctx, lspRoot, absPath, line, col, word, repoRoots)
+	} else {
+		locs, source = ws.lsp.Definition(ctx, lspRoot, absPath, line, col, word, repoRoots)
+	}
 
 	type outLoc struct {
 		Repo    string `json:"repo"`

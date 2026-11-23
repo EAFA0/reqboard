@@ -270,11 +270,12 @@
   border-top: 1px solid var(--rb-border);
 }
 
-#web-diff-modal.mod-key .wdiff-table td.code:hover,
-#web-diff-modal.mod-key .wdiff-split-table td.code-left:hover,
-#web-diff-modal.mod-key .wdiff-split-table td.code-right:hover {
+#web-diff-modal.mod-key .tok:hover {
   cursor: pointer;
-  text-decoration: underline dotted var(--rb-accent);
+  color: var(--rb-accent);
+  text-decoration: underline;
+  background: rgba(59, 130, 246, 0.16);
+  border-radius: 2px;
 }
 
 #wdiff-candidates {

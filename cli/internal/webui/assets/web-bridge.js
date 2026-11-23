@@ -154,7 +154,7 @@
       <div class="wdiff-body" id="wdiff-body"></div>
       <div class="wdiff-foot">
         <span id="wdiff-meta"></span>
-        <span>Cmd/Ctrl+点击符号跳定义(LSP) · Alt+← 返回 · 点击行号复制 file:line · Esc 关闭</span>
+        <span>Cmd/Ctrl+点击 跳定义 · Shift+Cmd/Ctrl+点击 查引用 · Alt+← 返回 · 点击行号复制 file:line · Esc 关闭</span>
       </div>
     </div>
     <div id="wdiff-candidates" class="hidden"></div>`;
@@ -188,11 +188,11 @@
         emitToBoard({ type: 'toast', message: '已复制 ' + loc });
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey) {
+      if (e.metaKey || e.ctrlKey) {
         const codeCell = e.target.closest('td.code, td.code-left, td.code-right');
         if (!codeCell || !diffState.data) return;
         e.preventDefault();
-        void handleCodeJump(codeCell, e);
+        void handleCodeJump(codeCell, e, !!e.shiftKey);
       }
     });
     const setModClass = (on) => {
@@ -319,7 +319,30 @@
     }
   }
 
+  function renderCodeHTML(text) {
+    const s = String(text == null ? '' : text);
+    const re = /[A-Za-z_][A-Za-z0-9_]*/g;
+    let out = '';
+    let last = 0;
+    let m;
+    while ((m = re.exec(s)) !== null) {
+      if (m.index > last) {
+        out += esc(s.slice(last, m.index));
+      }
+      out += `<span class="tok" data-col="${m.index + 1}">${esc(m[0])}</span>`;
+      last = m.index + m[0].length;
+    }
+    if (last < s.length) {
+      out += esc(s.slice(last));
+    }
+    return out;
+  }
+
   function extractClickedPosition(cell, ev) {
+    const tok = ev && ev.target && ev.target.closest ? ev.target.closest('.tok') : null;
+    if (tok && cell.contains(tok)) {
+      return { col: Number(tok.dataset.col || 1), word: tok.textContent || '' };
+    }
     const text = cell.textContent || '';
     let offset = 0;
     if (document.caretRangeFromPoint) {
@@ -345,7 +368,7 @@
     return { col: start + 1, word };
   }
 
-  function showCandidates(locs, source, x, y) {
+  function showCandidates(locs, source, x, y, kindLabel) {
     const box = document.getElementById('wdiff-candidates');
     if (!box) return;
     const rows = locs.map((loc, idx) => {
@@ -355,7 +378,7 @@
         <span class="wdiff-cand-preview">${esc(loc.preview || '')}</span>
       </button>`;
     }).join('');
-    box.innerHTML = `<div class="wdiff-cand-head"><span>找到 ${locs.length} 处定义（${esc(source)}）</span><button data-cand-close style="padding:0 5px">×</button></div>${rows}`;
+    box.innerHTML = `<div class="wdiff-cand-head"><span>找到 ${locs.length} 处${esc(kindLabel || '定义')}（${esc(source)}）</span><button data-cand-close style="padding:0 5px">×</button></div>${rows}`;
     box.classList.remove('hidden');
     const left = Math.max(12, Math.min(x + 8, window.innerWidth - 580));
     const top = Math.max(12, Math.min(y + 10, window.innerHeight - 330));
@@ -387,7 +410,7 @@
     void loadDiff(nextReq, { pushHistory: true, forceFullContextIfClean: true });
   }
 
-  async function handleCodeJump(cell, ev) {
+  async function handleCodeJump(cell, ev, findRefs) {
     const tr = cell.closest('tr');
     const newLine = Number((tr && tr.dataset && tr.dataset.newLine) || 0);
     if (!newLine) {
@@ -406,26 +429,28 @@
       col: String(col),
       word,
     });
+    const endpoint = findRefs ? '/api/references?' : '/api/definition?';
+    const label = findRefs ? '引用' : '定义';
     try {
-      const resp = await fetch('/api/definition?' + params.toString(), { cache: 'no-store' });
+      const resp = await fetch(endpoint + params.toString(), { cache: 'no-store' });
       const res = await resp.json();
       if (!resp.ok || res.ok === false) {
-        emitToBoard({ type: 'error', message: res.error || '跳转定义失败' });
+        emitToBoard({ type: 'error', message: res.error || `查找${label}失败` });
         return;
       }
       const locs = res.locations || [];
       if (!locs.length) {
-        emitToBoard({ type: 'toast', message: `未找到符号 "${word}" 的定义` });
+        emitToBoard({ type: 'toast', message: `未找到符号 "${word}" 的${label}` });
         return;
       }
-      if (locs.length === 1) {
+      if (!findRefs && locs.length === 1) {
         jumpToLocation({ ...locs[0], word });
         emitToBoard({ type: 'toast', message: `已跳转 ${word}（${res.source}）` });
         return;
       }
-      showCandidates(locs.map((l) => ({ ...l, word })), res.source || 'lsp', ev.clientX, ev.clientY);
+      showCandidates(locs.map((l) => ({ ...l, word })), res.source || 'lsp', ev.clientX, ev.clientY, label);
     } catch (err) {
-      emitToBoard({ type: 'error', message: 'LSP 跳转请求失败: ' + (err && err.message ? err.message : err) });
+      emitToBoard({ type: 'error', message: `LSP 查找${label}失败: ` + (err && err.message ? err.message : err) });
     }
   }
 
@@ -433,6 +458,7 @@
     const o = opts || {};
     ensureDiffModal();
     hideCandidates();
+    const wasOpen = diffState.open && !!diffState.data;
     if (o.pushHistory && diffState.open && diffState.req) {
       const body = document.getElementById('wdiff-body');
       diffState.backStack.push({
@@ -450,7 +476,9 @@
     updateNavButtons();
     const backdrop = document.getElementById('web-diff-backdrop');
     backdrop.classList.remove('hidden');
-    document.getElementById('wdiff-body').innerHTML = '<div class="wdiff-empty">正在读取 git diff…</div>';
+    if (!wasOpen) {
+      document.getElementById('wdiff-body').innerHTML = '<div class="wdiff-empty">正在读取 git diff…</div>';
+    }
     const wantFull = diffState.fullContext || (o.forceFullContextIfClean && req.line > 0);
     const params = new URLSearchParams({
       repo: req.repo || '',
@@ -489,7 +517,7 @@
           <td class="ln">${oldN}</td>
           <td class="ln">${newN}</td>
           <td class="sig">${sig}</td>
-          <td class="code">${esc(l.text)}</td>
+          <td class="code">${renderCodeHTML(l.text)}</td>
         </tr>`;
       }
     }
@@ -508,9 +536,9 @@
           const focus = focusLine > 0 && l.new_line === focusLine ? ' focus-line' : '';
           rows += `<tr class="${focus}" data-new-line="${l.new_line || 0}">
             <td class="ln">${l.old_line || ''}</td>
-            <td class="code-left">${esc(l.text)}</td>
+            <td class="code-left">${renderCodeHTML(l.text)}</td>
             <td class="ln">${l.new_line || ''}</td>
-            <td class="code-right">${esc(l.text)}</td>
+            <td class="code-right">${renderCodeHTML(l.text)}</td>
           </tr>`;
           i++;
           continue;
@@ -526,9 +554,9 @@
           const focus = focusLine > 0 && ((a && a.new_line === focusLine) || (d && d.old_line === focusLine)) ? ' focus-line' : '';
           rows += `<tr class="${focus}" data-new-line="${a ? a.new_line : 0}">
             <td class="ln ${d ? 'cell-del' : 'cell-empty'}">${d ? d.old_line : ''}</td>
-            <td class="code-left ${d ? 'cell-del' : 'cell-empty'}">${d ? esc(d.text) : ''}</td>
+            <td class="code-left ${d ? 'cell-del' : 'cell-empty'}">${d ? renderCodeHTML(d.text) : ''}</td>
             <td class="ln ${a ? 'cell-add' : 'cell-empty'}">${a ? a.new_line : ''}</td>
-            <td class="code-right ${a ? 'cell-add' : 'cell-empty'}">${a ? esc(a.text) : ''}</td>
+            <td class="code-right ${a ? 'cell-add' : 'cell-empty'}">${a ? renderCodeHTML(a.text) : ''}</td>
           </tr>`;
         }
       }
