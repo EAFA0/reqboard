@@ -237,6 +237,13 @@ func buildStatus(ctx *Ctx) (string, map[string]interface{}, *Error) {
 			len(dispatchPlan.Active), len(dispatchPlan.Blocked.WaitingExternal),
 			len(dispatchPlan.Blocked.WaitingTodo)))
 	}
+	dagWarnings := detectCatchAllWarnings(dag, total)
+	if len(dagWarnings) > 0 {
+		sb.WriteString("  [DAG 异味告警]（非阻断，建议核对）:\n")
+		for _, w := range dagWarnings {
+			sb.WriteString(fmt.Sprintf("    - %s (%s): %s\n", w.NodeID, w.Title, w.Message))
+		}
+	}
 	if len(events) > 0 {
 		sb.WriteString("  最近事件:\n")
 		start := len(events) - 5
@@ -285,10 +292,76 @@ func buildStatus(ctx *Ctx) (string, map[string]interface{}, *Error) {
 			"max_parallel":     dag.Orchestrator.MaxParallel,
 			"last_dispatch_at": dag.Orchestrator.LastDispatchAt,
 		},
-		"dispatch": dispatchPlan,
-		"events":   events,
+		"dispatch":     dispatchPlan,
+		"dag_warnings": dagWarnings,
+		"events":       events,
 	}
 	return sb.String(), data, nil
+}
+
+type dagWarning struct {
+	Code    string `json:"code"`
+	NodeID  string `json:"node_id"`
+	Title   string `json:"title"`
+	Message string `json:"message"`
+}
+
+func detectCatchAllWarnings(dag *model.DAG, totalMainPRD int) []dagWarning {
+	if dag == nil {
+		return nil
+	}
+	mineIDs := map[string]bool{}
+	for _, n := range dag.Nodes {
+		if n.Status == model.StatusDeprecated {
+			continue
+		}
+		if n.Scope == model.ScopeMine {
+			mineIDs[n.ID] = true
+		}
+	}
+	totalMine := len(mineIDs)
+	mineIn := map[string]map[string]bool{}
+	outDeg := map[string]int{}
+	for _, e := range dag.Edges {
+		outDeg[e.From]++
+		if mineIDs[e.From] && mineIDs[e.To] && e.From != e.To {
+			if mineIn[e.To] == nil {
+				mineIn[e.To] = map[string]bool{}
+			}
+			mineIn[e.To][e.From] = true
+		}
+	}
+	var out []dagWarning
+	for _, n := range dag.Nodes {
+		if !mineIDs[n.ID] {
+			continue
+		}
+		mainRefs := 0
+		for _, r := range n.PRDRefs {
+			if strings.HasPrefix(r, prd.DefaultPrefix+":") {
+				mainRefs++
+			}
+		}
+		inN := len(mineIn[n.ID])
+		var reasons []string
+		if mainRefs >= 15 && totalMainPRD > 0 && float64(mainRefs)/float64(totalMainPRD) >= 0.25 {
+			reasons = append(reasons, fmt.Sprintf("挂载主 PRD %d/%d (%.0f%%)", mainRefs, totalMainPRD, float64(mainRefs)/float64(totalMainPRD)*100))
+		}
+		if outDeg[n.ID] == 0 && totalMine >= 7 && inN >= 6 && float64(inN)/float64(totalMine-1) >= 0.60 {
+			reasons = append(reasons, fmt.Sprintf("汇聚 %d/%d 个我方节点且无出边", inN, totalMine-1))
+		}
+		if len(reasons) > 0 {
+			out = append(out, dagWarning{
+				Code:   "catch_all_sink",
+				NodeID: n.ID,
+				Title:  n.Title,
+				Message: fmt.Sprintf("疑似 PRD 兜底/汇总节点（%s）；mine 节点应对应真实生产代码增量，纯背景/存量不变式请用 `reqboard prd ignore`，端到端联调验收请改用 `todo`",
+					strings.Join(reasons, "，")),
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].NodeID < out[j].NodeID })
+	return out
 }
 
 func allOutOfScope(ids []string, dag *model.DAG) bool {

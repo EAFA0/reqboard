@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"reqboard/internal/model"
 	"reqboard/internal/testutil"
 )
 
@@ -260,4 +261,41 @@ func TestSourceMutationsRequireHumanActor(t *testing.T) {
 	}
 	// Read-only source list remains allowed for agents.
 	mustCLI(t, f.root, "source", "list", "--json")
+}
+
+func TestDetectCatchAllWarnings(t *testing.T) {
+	dag := &model.DAG{
+		Nodes: []*model.Node{
+			{ID: "n1", Title: "f1", Scope: model.ScopeMine, Status: model.StatusPending},
+			{ID: "n2", Title: "f2", Scope: model.ScopeMine, Status: model.StatusPending},
+			{ID: "n3", Title: "f3", Scope: model.ScopeMine, Status: model.StatusPending},
+			{ID: "n4", Title: "f4", Scope: model.ScopeMine, Status: model.StatusPending},
+			{ID: "n5", Title: "f5", Scope: model.ScopeMine, Status: model.StatusPending},
+			{ID: "n6", Title: "f6", Scope: model.ScopeMine, Status: model.StatusPending},
+			{
+				ID: "e2e", Title: "总闭环验收", Scope: model.ScopeMine, Status: model.StatusPending,
+				PRDRefs: []string{
+					"p:1", "p:2", "p:3", "p:4", "p:5", "p:6", "p:7", "p:8",
+					"p:9", "p:10", "p:11", "p:12", "p:13", "p:14", "p:15",
+				},
+			},
+			// Todo nodes with many incoming edges are never flagged as mine catch-all sinks.
+			{ID: "todo-e2e", Title: "端到端联调检查", Scope: model.ScopeTodo, Status: model.StatusPending},
+		},
+		Edges: []*model.Edge{
+			{ID: "e1", From: "n1", To: "e2e", Kind: model.EdgeHard},
+			{ID: "e2", From: "n2", To: "e2e", Kind: model.EdgeHard},
+			{ID: "e3", From: "n3", To: "e2e", Kind: model.EdgeHard},
+			{ID: "e4", From: "n4", To: "e2e", Kind: model.EdgeHard},
+			{ID: "e5", From: "n5", To: "e2e", Kind: model.EdgeHard},
+			{ID: "e6", From: "n6", To: "e2e", Kind: model.EdgeHard},
+		},
+	}
+	warnings := detectCatchAllWarnings(dag, 40)
+	if len(warnings) != 1 || warnings[0].NodeID != "e2e" || warnings[0].Code != "catch_all_sink" {
+		t.Fatalf("unexpected warnings = %+v", warnings)
+	}
+	if !strings.Contains(warnings[0].Message, "挂载主 PRD 15/40") || !strings.Contains(warnings[0].Message, "汇聚 6/6") {
+		t.Fatalf("expected both PRD dump and funnel reasons, got %s", warnings[0].Message)
+	}
 }

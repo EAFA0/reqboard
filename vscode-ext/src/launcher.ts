@@ -56,7 +56,7 @@ export const LAUNCHER_ACTIONS: LauncherActionMeta[] = [
     desc: '并发调研多仓代码与 PRD，串行收口 DAG 与节点 done 状态',
     scope: 'workspace',
     defaultPrompt:
-      '请结合当前 .reqboard/prd.md、人类已导入的补充来源与现有代码库，按 ReqBoard 规范规划或校准 DAG：代码调研与已有节点核验阶段按仓库/模块并发扇出只读子代理加速，最终由主代理串行收口直接通过 reqboard CLI 更新当前 DAG（反碎化、无伪硬边、区分 todo 与真实外部依赖、核对 stale 节点）；严禁将 Agent 自己的代码调研/复核总结注册为补充需求来源或挂入 prd_refs（技术事实写入节点 description/note，需求缺口建 todo），也不要在 .reqboard/ 下新建额外的报告或 JSON 快照文件；若已有实现代码，同步核验 bindings 与 4 道门禁，达标则 reqboard done，受外部/mock/todo/人工批注阻塞则标 implemented 并列明缺口，跑独立 Critic 自审后直接在终端汇报。',
+      '请结合当前 .reqboard/prd.md、人类已导入的补充来源与现有代码库，按 ReqBoard 规范规划或校准 DAG：代码调研与已有节点核验阶段按仓库/模块并发扇出只读子代理加速，最终由主代理串行收口直接通过 reqboard CLI 更新当前 DAG（反碎化、无伪硬边、区分 todo 与真实外部依赖、核对 stale 节点）；mine 节点只代表需我方写/改生产代码并产出 AST Diff 绑定的真实增量，严禁为了凑 100% 覆盖率建不写代码的“总验收/闭环回归”类 mine 兜底节点（端到端联调验收请用 todo，纯背景/Demo 链接/存量不变式说明必须诚实执行 reqboard prd ignore，纯其他端交互段落只挂 collab）；严禁将 Agent 自己的代码调研/复核总结注册为补充需求来源或挂入 prd_refs（技术事实写入节点 description/note，需求缺口建 todo），也不要在 .reqboard/ 下新建额外的报告或 JSON 快照文件；若已有实现代码，同步核验 bindings 与 4 道门禁，达标则 reqboard done，受外部/mock/todo/人工批注阻塞则标 implemented 并列明缺口，跑独立 Critic 自审后直接在终端汇报。',
   },
   {
     id: 'node_work',

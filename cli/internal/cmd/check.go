@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"reqboard/internal/audit"
+	"reqboard/internal/prd"
 )
 
 func runCheck(a *Args, rest []string) *Error {
@@ -89,6 +90,24 @@ func runCheck(a *Args, rest []string) *Error {
 			sb.WriteString(fmt.Sprintf("    - %s:%s :: %s (+%d/-%d) <- lease %s\n", x.Repo, x.File, x.Symbol, x.Added, x.Deleted, strings.Join(x.LeaseSessions, ",")))
 		}
 	}
+	var dagWarnings []dagWarning
+	if opts.All {
+		totalMain := 0
+		if doc := loadPRDDoc(ctx); doc != nil {
+			for _, b := range doc.Blocks {
+				if b.Kind != prd.KindHeading {
+					totalMain++
+				}
+			}
+		}
+		dagWarnings = detectCatchAllWarnings(dag, totalMain)
+	}
+	if len(dagWarnings) > 0 {
+		sb.WriteString("\n  [DAG 异味告警]（非阻断，建议核对）:\n")
+		for _, w := range dagWarnings {
+			sb.WriteString(fmt.Sprintf("    - %s (%s): %s\n", w.NodeID, w.Title, w.Message))
+		}
+	}
 	if rep.Violations == 0 {
 		sb.WriteString("\n  [OK] 无 Orphan Diff / To-Delete / Broken Binding，可继续完结流程。\n")
 	} else {
@@ -112,6 +131,7 @@ func runCheck(a *Args, rest []string) *Error {
 		"repos":         rep.Repos,
 		"ignored_files": rep.Ignored,
 		"filter":        rep.Filter,
+		"dag_warnings":  dagWarnings,
 	}
 	ctx.Emit(sb.String(), data)
 	if rep.Violations > 0 {
