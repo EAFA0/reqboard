@@ -67,7 +67,11 @@ export class BoardPanel {
       {
         enableScripts: true,
         retainContextWhenHidden: true,
-        localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')],
+        localResourceRoots: [
+          vscode.Uri.joinPath(context.extensionUri, 'media'),
+          vscode.Uri.file(root),
+          vscode.Uri.file(os.tmpdir()),
+        ],
       }
     );
     this.panel.webview.html = renderHTML(this.panel.webview, context.extensionUri);
@@ -143,7 +147,10 @@ export class BoardPanel {
         return;
       }
       this.snapshot = res.data;
-      this.post({ type: 'snapshot', data: { ...res.data, launcher: this.launcherSummary() } });
+      this.post({
+        type: 'snapshot',
+        data: { ...res.data, launcher: this.launcherSummary(), _imageUris: this.collectImageUris(res.data) },
+      });
     } catch (e: any) {
       this.post({ type: 'error', message: this.describeError(e) });
     } finally {
@@ -153,6 +160,74 @@ export class BoardPanel {
         this.scheduleRefresh();
       }
     }
+  }
+
+  private collectImageUris(snap: any): Record<string, string> {
+    const out: Record<string, string> = {};
+    const exts = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg']);
+    const allowedRoots = [path.resolve(this.root), path.resolve(os.tmpdir())];
+    const inAllowed = (p: string): boolean => {
+      const resolved = path.resolve(p);
+      return allowedRoots.some((base) => resolved === base || resolved.startsWith(base + path.sep));
+    };
+    const resolveImage = (raw: string, bases: string[]): string | null => {
+      const clean = raw.trim().replace(/^<|>$/g, '').split(/[?#]/)[0];
+      if (!clean || /^https?:\/\//i.test(clean) || /^data:/i.test(clean)) {
+        return null;
+      }
+      const ext = path.extname(clean).toLowerCase();
+      if (!exts.has(ext)) {
+        return null;
+      }
+      const candidates = path.isAbsolute(clean)
+        ? [clean]
+        : bases.map((b) => path.resolve(b, clean));
+      for (const cand of candidates) {
+        if (!inAllowed(cand)) {
+          continue;
+        }
+        try {
+          if (fs.statSync(cand).isFile()) {
+            return this.panel.webview.asWebviewUri(vscode.Uri.file(cand)).toString();
+          }
+        } catch {
+          // try next base
+        }
+      }
+      return null;
+    };
+    const scanBlocks = (blocks: any[], bases: string[]) => {
+      for (const b of blocks || []) {
+        const text = String(b?.text || '');
+        if (!text.includes('![') && !text.includes('<img')) {
+          continue;
+        }
+        for (const m of text.matchAll(/!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
+          const raw = m[1];
+          if (raw && !out[raw]) {
+            const uri = resolveImage(raw, bases);
+            if (uri) {
+              out[raw] = uri;
+            }
+          }
+        }
+        for (const m of text.matchAll(/<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/gi)) {
+          const raw = m[1];
+          if (raw && !out[raw]) {
+            const uri = resolveImage(raw, bases);
+            if (uri) {
+              out[raw] = uri;
+            }
+          }
+        }
+      }
+    };
+    const reqDir = path.join(this.root, '.reqboard');
+    scanBlocks(snap?.prd?.blocks || [], [reqDir, this.root]);
+    for (const s of snap?.sources || []) {
+      scanBlocks(s?.blocks || [], [path.join(reqDir, 'sources'), reqDir, this.root]);
+    }
+    return out;
   }
 
   private describeError(e: any): string {

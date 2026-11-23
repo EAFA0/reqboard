@@ -470,19 +470,167 @@
     setTimeout(() => el.classList.remove(klass), 1200);
   }
 
+  function resolveImageUri(rawSrc) {
+    const src = String(rawSrc || '').trim();
+    if (!src) {
+      return '';
+    }
+    if (/^data:image\//i.test(src)) {
+      return src;
+    }
+    const map = (state.snap && state.snap._imageUris) || {};
+    return map[src] || '';
+  }
+
+  function renderImageMarkup(rawSrc, rawAlt, rawName) {
+    const uri = resolveImageUri(rawSrc);
+    const label = String(rawName || rawAlt || '').trim() || String(rawSrc || '').split('/').pop() || '图片';
+    const alt = String(rawAlt || '').trim();
+    if (uri) {
+      const cap = alt ? `<figcaption class="prd-img-cap">${esc(alt)}</figcaption>` : '';
+      return `<figure class="prd-img-wrap"><img class="prd-img" src="${esc(uri)}" alt="${esc(alt || label)}" title="点击放大查看">${cap}</figure>`;
+    }
+    const shortAlt = alt && alt !== label ? (alt.length > 72 ? alt.slice(0, 72) + '…' : alt) : '';
+    return `<span class="prd-img-chip" title="${esc(alt || label)}"><span class="prd-img-ico">🖼️</span><span class="prd-img-name">${esc(label)}</span>${shortAlt ? `<span class="prd-img-alt">${esc(shortAlt)}</span>` : ''}</span>`;
+  }
+
   function inlineMD(text) {
     let s = esc(text);
     s = s.replace(/&lt;br\s*\/?&gt;/gi, '<br>');
-    const codes = [];
-    s = s.replace(/`([^`]+)`/g, (_m, code) => {
-      codes.push(code);
-      return '\u0000' + (codes.length - 1) + '\u0000';
-    });
-    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    const slots = [];
+    const stash = (html) => {
+      slots.push(html);
+      return '\u0000' + (slots.length - 1) + '\u0000';
+    };
+    s = s.replace(/`([^`]+)`/g, (_m, code) => stash(`<code>${code}</code>`));
+    s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)/g, (_m, alt, src) =>
+      stash(renderImageMarkup(src, alt, '')));
     s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_m, label, url) =>
-      `<a class="prd-link" href="${url}" title="${url}">${label}</a>`);
-    s = s.replace(/\u0000(\d+)\u0000/g, (_m, i) => `<code>${codes[Number(i)]}</code>`);
+      stash(`<a class="prd-link" href="${url}" title="${url}">${label}</a>`));
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+    s = s.replace(/\u0000(\d+)\u0000/g, (_m, i) => slots[Number(i)]);
     return s.replace(/\n/g, '<br>');
+  }
+
+  function htmlAttr(attrStr, name) {
+    const re = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i');
+    const m = re.exec(attrStr || '');
+    return m ? (m[1] !== undefined ? m[1] : m[2]) : '';
+  }
+
+  function renderSafeHTML(raw) {
+    const stripped = String(raw || '').replace(/<(script|style|iframe|object|embed)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+    const allowed = new Set([
+      'table', 'thead', 'tbody', 'tr', 'th', 'td',
+      'ol', 'ul', 'li', 'b', 'strong', 'i', 'em', 'del', 's',
+      'code', 'pre', 'p', 'br', 'blockquote', 'hr',
+    ]);
+    const voidTags = new Set(['br', 'hr']);
+    const re = /<(\/?)([a-zA-Z][a-zA-Z0-9_-]*)([^>]*)>/g;
+    let out = '';
+    let last = 0;
+    let m;
+    while ((m = re.exec(stripped)) !== null) {
+      if (m.index > last) {
+        out += inlineMD(stripped.slice(last, m.index));
+      }
+      last = re.lastIndex;
+      const closing = m[1] === '/';
+      const tag = m[2].toLowerCase();
+      const attrs = m[3] || '';
+      if (tag === 'cite') {
+        if (!closing) {
+          const uname = htmlAttr(attrs, 'user-name') || htmlAttr(attrs, 'name');
+          if (uname) {
+            out += `<span class="prd-mention">@${esc(uname)}</span>`;
+          }
+        }
+        continue;
+      }
+      if (tag === 'img') {
+        if (!closing) {
+          out += renderImageMarkup(htmlAttr(attrs, 'src'), htmlAttr(attrs, 'alt'), htmlAttr(attrs, 'name'));
+        }
+        continue;
+      }
+      if (tag === 'whiteboard') {
+        if (!closing) {
+          const tok = htmlAttr(attrs, 'token');
+          out += `<span class="prd-img-chip" title="${esc(tok || '飞书画板')}"><span class="prd-img-ico">🧩</span><span class="prd-img-name">画板${tok ? ' ' + esc(tok.slice(0, 8)) : ''}</span></span>`;
+        }
+        continue;
+      }
+      if (tag === 'callout') {
+        out += closing ? '</div>' : '<div class="prd-callout">';
+        continue;
+      }
+      if (tag === 'comment') {
+        out += closing ? '</div>' : '<div class="prd-comment"><span class="prd-comment-tag">💬 评论</span>';
+        continue;
+      }
+      if (tag === 'quote') {
+        out += closing ? '</div>' : '<div class="prd-comment-quote">';
+        continue;
+      }
+      if (tag === 'msg') {
+        if (closing) {
+          out += '</div>';
+        } else {
+          const author = htmlAttr(attrs, 'user-name') || htmlAttr(attrs, 'author');
+          out += `<div class="prd-comment-msg">${author ? `<span class="prd-mention">@${esc(author)}</span> ` : ''}`;
+        }
+        continue;
+      }
+      if (!allowed.has(tag)) {
+        continue;
+      }
+      if (closing) {
+        if (!voidTags.has(tag)) {
+          out += tag === 'table' ? '</table></div>' : `</${tag}>`;
+        }
+        continue;
+      }
+      if (tag === 'table') {
+        out += '<div class="prd-html-table-wrap"><table class="prd-html-table">';
+        continue;
+      }
+      if (tag === 'th' || tag === 'td') {
+        let aOut = '';
+        const cs = Number(htmlAttr(attrs, 'colspan'));
+        const rs = Number(htmlAttr(attrs, 'rowspan'));
+        if (cs > 1 && cs <= 20) {
+          aOut += ` colspan="${cs}"`;
+        }
+        if (rs > 1 && rs <= 50) {
+          aOut += ` rowspan="${rs}"`;
+        }
+        out += `<${tag}${aOut}>`;
+        continue;
+      }
+      out += `<${tag}>`;
+    }
+    if (last < stripped.length) {
+      out += inlineMD(stripped.slice(last));
+    }
+    return out;
+  }
+
+  function renderRichBlock(text) {
+    const raw = String(text || '');
+    const trimmed = raw.trim();
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      return '<hr class="prd-hr">';
+    }
+    if (/<(?:table|thead|tbody|tr|td|th|ol|ul|li|cite|img|comment|quote|msg|callout|whiteboard|b|strong|del|s|blockquote)\b/i.test(raw)) {
+      return `<div class="prd-rich">${renderSafeHTML(raw)}</div>`;
+    }
+    const lines = raw.split('\n');
+    if (lines.every((l) => !l.trim() || l.trim().startsWith('>'))) {
+      const inner = lines.map((l) => l.replace(/^\s*>\s?/, '')).join('\n');
+      return `<div class="prd-callout">${inlineMD(inner)}</div>`;
+    }
+    return `<div>${inlineMD(raw)}</div>`;
   }
 
   function showToast(message, level) {
@@ -650,7 +798,7 @@
       } else if (b.kind === 'code') {
         inner = `<div class="prd-code">${esc(b.text)}</div>`;
       } else {
-        inner = `<div>${inlineMD(b.text)}</div>`;
+        inner = renderRichBlock(b.text);
       }
       const refBadge = !isMain && nodeIds.length
         ? `<span class="source-ref-badge" title="引用节点：${esc(nodeIds.join(', '))}">${nodeIds.length} 节点</span>`
@@ -2433,7 +2581,35 @@
     });
   }
 
+  function openImageLightbox(src, alt) {
+    const existing = document.querySelector('.prd-lightbox');
+    if (existing) {
+      existing.remove();
+    }
+    const overlay = document.createElement('div');
+    overlay.className = 'prd-lightbox';
+    overlay.innerHTML = `<div class="prd-lightbox-inner"><img src="${esc(src)}" alt="${esc(alt || '')}">${alt ? `<div class="prd-lightbox-cap">${esc(alt)}</div>` : ''}</div>`;
+    const close = () => {
+      overlay.remove();
+      document.removeEventListener('keydown', onKey);
+    };
+    const onKey = (ev) => {
+      if (ev.key === 'Escape') {
+        close();
+      }
+    };
+    overlay.addEventListener('click', close);
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(overlay);
+  }
+
   $('prd-list').addEventListener('click', (e) => {
+    const img = e.target.closest('img.prd-img');
+    if (img) {
+      e.stopPropagation();
+      openImageLightbox(img.getAttribute('src') || '', img.getAttribute('alt') || '');
+      return;
+    }
     const link = e.target.closest('a.prd-link');
     if (link) {
       if (e.preventDefault) {

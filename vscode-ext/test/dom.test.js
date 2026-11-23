@@ -941,6 +941,49 @@ test('selecting a canvas node highlights it in blue, neighbors in amber, and dim
     'clicking neighbor link in right pane should select and jump to rb-b');
 });
 
+test('left PRD pane safely renders HTML tables, mentions, callouts, and inline images with lightbox', () => {
+  const snap = wideSnapshot();
+  snap._imageUris = { './arch.svg': 'vscode-webview://test/arch.svg' };
+  snap.prd.blocks = [
+    {
+      anchor: 'p-html',
+      kind: 'paragraph',
+      text: '<table><colgroup><col/></colgroup><tbody><tr><td><b>模块</b></td><td><b>详情</b></td></tr><tr><td rowspan="2">入口</td><td><ol><li>支持代理 <cite type="user" user-id="u1" user-name="Alice"></cite></li></ol><img name="order.png" alt="控制台截图"/></td></tr></tbody></table><script>window.__xss=1</script>',
+      coverage: 'covered',
+      node_ids: ['rb-a'],
+    },
+    {
+      anchor: 'p-img',
+      kind: 'paragraph',
+      text: '架构图：![系统架构](./arch.svg)',
+      coverage: 'covered',
+      node_ids: ['rb-a'],
+    },
+    {
+      anchor: 'p-call',
+      kind: 'paragraph',
+      text: '> 核心边界：不改旧接口',
+      coverage: 'covered',
+      node_ids: ['rb-a'],
+    },
+  ];
+  const { document, window } = boot(snap);
+  const htmlBlock = document.querySelector('.prd-block[data-anchor="p-html"]');
+  assert.ok(htmlBlock.querySelector('table.prd-html-table'), 'expected real HTML table');
+  assert.ok(htmlBlock.querySelector('td[rowspan="2"]'), 'expected rowspan preserved');
+  assert.strictEqual(htmlBlock.querySelector('.prd-mention').textContent, '@Alice');
+  assert.ok(htmlBlock.querySelector('.prd-img-chip'), 'expected compact image chip for unresolved img');
+  assert.ok(!htmlBlock.querySelector('script') && !htmlBlock.textContent.includes('__xss'), 'script must be stripped');
+  const img = document.querySelector('.prd-block[data-anchor="p-img"] img.prd-img');
+  assert.ok(img && img.getAttribute('src') === 'vscode-webview://test/arch.svg', 'expected resolved local image');
+  click(window, img);
+  const lb = document.querySelector('.prd-lightbox');
+  assert.ok(lb, 'clicking inline image should open lightbox');
+  click(window, lb);
+  assert.ok(!document.querySelector('.prd-lightbox'), 'clicking lightbox should close it');
+  assert.ok(document.querySelector('.prd-block[data-anchor="p-call"] .prd-callout'), 'expected callout rendering');
+});
+
 (async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   // 1. Hovering a dock card peeks (zooms & centers), leaving restores original view.
