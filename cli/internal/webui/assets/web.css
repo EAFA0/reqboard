@@ -151,6 +151,10 @@
   padding: 3px 8px;
 }
 
+.wdiff-actions button.hidden {
+  display: none;
+}
+
 .wdiff-actions button.active {
   border-color: var(--rb-accent);
   background: var(--vscode-button-background);

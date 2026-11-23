@@ -335,8 +335,8 @@
     const d = diffState.data;
     if (!d) return;
     const sym = d.symbol ? `<span class="wdiff-symbol">:: ${esc(d.symbol)}</span>` : '';
-    const stat = `<span class="wdiff-stat"><span class="add">+${d.added || 0}</span><span class="del">-${d.deleted || 0}</span></span>`;
-    document.getElementById('wdiff-title').innerHTML = `${esc(d.repo)}:${esc(d.file)} ${sym} ${stat}`;
+    const stat = `<span class="wdiff-stat" title="整个文件的改动行数（列表里显示的是单个符号的改动行数）">文件 <span class="add">+${d.added || 0}</span><span class="del">-${d.deleted || 0}</span></span>`;
+    document.getElementById('wdiff-title').innerHTML = `${esc(d.repo)}:${esc(d.file)} ${stat} ${sym}`;
     document.getElementById('wdiff-unified').classList.toggle('active', diffState.mode !== 'split');
     document.getElementById('wdiff-split').classList.toggle('active', diffState.mode === 'split');
     document.getElementById('wdiff-context').classList.toggle('active', diffState.fullContext);
