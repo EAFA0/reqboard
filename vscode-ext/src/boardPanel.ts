@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 
 import { CLIError, ReqboardCLI, gitShow } from './cli';
+import { buildReadOnlyFileDiff, collectFileDiff } from './diffService';
 import {
   LAUNCHER_STATS_KEY,
   LauncherStatsMap,
@@ -39,6 +40,7 @@ export class BoardPanel {
   private refreshing = false;
   private pendingRefresh = false;
   private cleaned = false;
+  private readonly externalAllow = new Set<string>();
 
   public static createOrShow(context: vscode.ExtensionContext, root: string): void {
     if (BoardPanel.current) {
@@ -485,6 +487,21 @@ export class BoardPanel {
       case 'open.diff':
         await this.openDiff(msg);
         return;
+      case 'diff.fetch':
+        await this.handleDiffFetch(msg);
+        return;
+      case 'diff.symbol':
+        await this.handleDiffSymbol(msg);
+        return;
+      case 'diff.openInEditor':
+        await this.openInEditor(String(msg.absPath || ''), Number(msg.line || 1));
+        return;
+      case 'clipboard.write':
+        if (msg.text) {
+          await vscode.env.clipboard.writeText(String(msg.text));
+          this.post({ type: 'toast', level: 'info', message: String(msg.toast || '已复制') });
+        }
+        return;
       case 'open.external': {
         const url = String(msg.url || '');
         if (!/^https?:\/\//i.test(url)) {
@@ -603,6 +620,11 @@ export class BoardPanel {
   }
 
   private async openDiff(msg: any): Promise<void> {
+    const viewer = vscode.workspace.getConfiguration('reqboard').get<string>('diffViewer', 'builtin');
+    if (viewer === 'builtin') {
+      this.post({ type: 'diff.open', req: msg });
+      return;
+    }
     const snap = this.snapshot;
     const repo = (snap?.config?.repos || []).find((r: any) => r.name === msg.repo);
     if (!repo) {
@@ -621,11 +643,13 @@ export class BoardPanel {
     }
     const uri = vscode.Uri.file(abs);
     let opened = false;
-    try {
-      await vscode.commands.executeCommand('focusedGit.openFileComparison', uri);
-      opened = true;
-    } catch {
-      opened = false;
+    if (viewer === 'focused-git') {
+      try {
+        await vscode.commands.executeCommand('focusedGit.openFileComparison', uri);
+        opened = true;
+      } catch {
+        opened = false;
+      }
     }
     if (!opened) {
       try {
@@ -637,6 +661,181 @@ export class BoardPanel {
     }
     if (line && vscode.workspace.getConfiguration('reqboard').get<boolean>('revealSymbolAfterOpen', true)) {
       setTimeout(() => this.revealLine(abs, line), 250);
+    }
+  }
+
+  private resolveConfiguredRepos(): Array<{ name: string; path: string; baseRef: string }> {
+    const repos: any[] = this.snapshot?.config?.repos || [];
+    return repos.map((r) => ({
+      name: String(r.name || ''),
+      path: path.resolve(path.isAbsolute(r.path) ? r.path : path.join(this.root, r.path)),
+      baseRef: String(r.base_ref || 'HEAD'),
+    }));
+  }
+
+  private async handleDiffFetch(msg: any): Promise<void> {
+    const reqId = Number(msg.reqId || 0);
+    const repoName = String(msg.repo || '').trim();
+    const relFile = String(msg.file || '').trim();
+    const symbol = String(msg.symbol || '').trim();
+    let focusLine = Number(msg.line || 0);
+    const contextLines = typeof msg.context === 'number' ? msg.context : 5;
+    if (!repoName || !relFile) {
+      this.post({ type: 'diff.data', reqId, error: 'repo 和 file 不能为空' });
+      return;
+    }
+
+    try {
+      if (repoName === '__external__') {
+        const abs = path.resolve(relFile);
+        if (!this.externalAllow.has(abs)) {
+          this.post({ type: 'diff.data', reqId, error: '外部文件未在 LSP 白名单中' });
+          return;
+        }
+        const raw = fs.readFileSync(abs);
+        const fd = buildReadOnlyFileDiff(raw, 'external', 'external', 'external dependency — read-only');
+        this.post({
+          type: 'diff.data',
+          reqId,
+          data: {
+            ...fd,
+            repo: '__external__',
+            file: abs,
+            abs_path: abs,
+            symbol,
+            focus_line: focusLine,
+          },
+        });
+        return;
+      }
+
+      const repo = this.resolveConfiguredRepos().find((r) => r.name === repoName);
+      if (!repo) {
+        this.post({ type: 'diff.data', reqId, error: `repo ${repoName} 不在 config.json 中` });
+        return;
+      }
+      const abs = path.resolve(repo.path, relFile);
+      if (abs !== repo.path && !abs.startsWith(repo.path + path.sep)) {
+        this.post({ type: 'diff.data', reqId, error: '非法路径：越出仓库范围' });
+        return;
+      }
+      const fd = await collectFileDiff(repo.path, repo.baseRef, relFile, contextLines);
+      if (focusLine <= 0 && symbol) {
+        try {
+          focusLine = findSymbolLine(fs.readFileSync(abs, 'utf8'), symbol);
+        } catch {
+          focusLine = 0;
+        }
+      }
+      this.post({
+        type: 'diff.data',
+        reqId,
+        data: {
+          ...fd,
+          repo: repoName,
+          file: relFile,
+          abs_path: abs,
+          symbol,
+          focus_line: focusLine,
+        },
+      });
+    } catch (e: any) {
+      this.post({ type: 'diff.data', reqId, error: `读取 diff 失败: ${e?.message || e}` });
+    }
+  }
+
+  private async handleDiffSymbol(msg: any): Promise<void> {
+    const reqId = Number(msg.reqId || 0);
+    const absPath = path.resolve(String(msg.absPath || ''));
+    const line = Math.max(0, Number(msg.line || 1) - 1);
+    const col = Math.max(0, Number(msg.col || 1) - 1);
+    const findRefs = Boolean(msg.references);
+    if (!absPath || !fs.existsSync(absPath)) {
+      this.post({ type: 'diff.symbols', reqId, error: '源文件不存在' });
+      return;
+    }
+    try {
+      const docUri = vscode.Uri.file(absPath);
+      // Ensure the document is loaded so VS Code language servers (gopls/tsserver/pyright/etc.) index it.
+      await vscode.workspace.openTextDocument(docUri);
+      const pos = new vscode.Position(line, col);
+      const cmdName = findRefs ? 'vscode.executeReferenceProvider' : 'vscode.executeDefinitionProvider';
+      const raw = await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(cmdName, docUri, pos);
+      const repos = this.resolveConfiguredRepos();
+      const seen = new Set<string>();
+      const locations: any[] = [];
+      for (const item of raw || []) {
+        const isLink = 'targetUri' in item;
+        const targetUri = isLink ? item.targetUri : item.uri;
+        if (!targetUri || targetUri.scheme !== 'file') {
+          continue;
+        }
+        const range = isLink ? (item.targetSelectionRange || item.targetRange) : item.range;
+        const targetAbs = path.resolve(targetUri.fsPath);
+        const targetLine = (range?.start?.line ?? 0) + 1;
+        const targetCol = (range?.start?.character ?? 0) + 1;
+        // For Find References, skip the clicked declaration site itself.
+        if (findRefs && targetAbs === absPath && targetLine === line + 1) {
+          continue;
+        }
+        const key = `${targetAbs}:${targetLine}:${targetCol}`;
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+
+        let matchedRepo = '__external__';
+        let matchedFile = targetAbs;
+        for (const r of repos) {
+          if (targetAbs === r.path || targetAbs.startsWith(r.path + path.sep)) {
+            matchedRepo = r.name;
+            matchedFile = path.relative(r.path, targetAbs).split(path.sep).join('/');
+            break;
+          }
+        }
+        if (matchedRepo === '__external__') {
+          this.externalAllow.add(targetAbs);
+        }
+        let preview = '';
+        try {
+          const lines = fs.readFileSync(targetAbs, 'utf8').split(/\r?\n/);
+          preview = (lines[targetLine - 1] || '').trim();
+        } catch {
+          preview = '';
+        }
+        locations.push({
+          repo: matchedRepo,
+          file: matchedFile,
+          abs_path: targetAbs,
+          line: targetLine,
+          col: targetCol,
+          preview,
+          source: 'vscode-lsp',
+        });
+        if (locations.length >= 50) {
+          break;
+        }
+      }
+      this.post({ type: 'diff.symbols', reqId, source: 'vscode-lsp', locations });
+    } catch (e: any) {
+      this.post({ type: 'diff.symbols', reqId, error: `VS Code LSP 查询失败: ${e?.message || e}` });
+    }
+  }
+
+  private async openInEditor(absPath: string, line: number): Promise<void> {
+    if (!absPath) {
+      return;
+    }
+    try {
+      const uri = vscode.Uri.file(path.resolve(absPath));
+      const doc = await vscode.workspace.openTextDocument(uri);
+      const pos = new vscode.Position(Math.max(0, line - 1), 0);
+      await vscode.window.showTextDocument(doc, {
+        preview: false,
+        selection: new vscode.Range(pos, pos),
+      });
+    } catch (e: any) {
+      this.post({ type: 'error', message: `无法打开文件: ${e?.message || e}` });
     }
   }
 

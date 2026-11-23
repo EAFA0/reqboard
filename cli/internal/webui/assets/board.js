@@ -79,6 +79,7 @@
   function post(msg) {
     vscode.postMessage(msg);
   }
+  window.__reqboardPost = post;
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({

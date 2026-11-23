@@ -1,0 +1,306 @@
+/* Built-in Code Diff Viewer modal for VS Code Webview (Split/Unified + Fullscreen + Live LSP). */
+
+#rb-diff-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: rgba(0, 0, 0, 0.56);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+
+#rb-diff-backdrop.hidden {
+  display: none;
+}
+
+#rb-diff-backdrop.fullscreen {
+  padding: 0;
+}
+
+#rb-diff-modal {
+  width: min(1360px, 96vw);
+  height: min(88vh, 920px);
+  display: flex;
+  flex-direction: column;
+  background: var(--rb-bg);
+  color: var(--rb-fg);
+  border: 1px solid var(--rb-border);
+  border-radius: 8px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+#rb-diff-backdrop.fullscreen #rb-diff-modal {
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+  border: none;
+}
+
+.wdiff-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--rb-panel);
+  border-bottom: 1px solid var(--rb-border);
+  flex: 0 0 auto;
+}
+
+.wdiff-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--rb-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wdiff-symbol {
+  color: var(--rb-blue);
+  font-weight: 600;
+}
+
+.wdiff-stat {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: var(--rb-panel-2);
+  border: 1px solid var(--rb-border);
+}
+
+.wdiff-stat .add { color: var(--rb-green); }
+.wdiff-stat .del { color: var(--rb-red); margin-left: 4px; }
+
+.wdiff-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.wdiff-actions button {
+  font-size: 11px;
+  padding: 3px 7px;
+}
+
+.wdiff-actions button.hidden {
+  display: none;
+}
+
+.wdiff-actions button.active {
+  border-color: var(--rb-accent);
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #ffffff);
+}
+
+.wdiff-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  background: var(--rb-bg);
+  color: var(--rb-fg);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  line-height: 1.55;
+  tab-size: 4;
+}
+
+.wdiff-empty {
+  padding: 28px;
+  text-align: center;
+  color: var(--rb-muted);
+}
+
+.wdiff-table,
+.wdiff-split-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.wdiff-table td,
+.wdiff-split-table td {
+  padding: 1px 8px;
+  vertical-align: top;
+  color: var(--rb-fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.wdiff-table .ln,
+.wdiff-split-table .ln {
+  text-align: right;
+  color: var(--rb-muted);
+  user-select: none;
+  border-right: 1px solid var(--rb-border);
+  cursor: pointer;
+  padding: 1px 6px;
+}
+
+.wdiff-table .ln:hover,
+.wdiff-split-table .ln:hover {
+  color: var(--rb-accent);
+  text-decoration: underline;
+}
+
+.wdiff-table .sig {
+  text-align: center;
+  user-select: none;
+  font-weight: 700;
+  padding: 1px 2px;
+}
+
+.wdiff-table tr.hunk td,
+.wdiff-split-table tr.hunk td {
+  background: rgba(59, 130, 246, 0.14);
+  color: var(--rb-blue);
+  padding: 4px 10px;
+  font-size: 11px;
+  border-top: 1px solid var(--rb-border);
+  border-bottom: 1px solid var(--rb-border);
+}
+
+.wdiff-table tr.add td { background: rgba(63, 185, 80, 0.16); }
+.wdiff-table tr.add .sig { color: var(--rb-green); }
+
+.wdiff-table tr.del td { background: rgba(248, 81, 73, 0.16); }
+.wdiff-table tr.del .sig { color: var(--rb-red); }
+
+.wdiff-split-table .code-left {
+  border-right: 1px solid var(--rb-border);
+}
+
+.wdiff-split-table td.cell-del { background: rgba(248, 81, 73, 0.16); }
+.wdiff-split-table td.cell-add { background: rgba(63, 185, 80, 0.16); }
+.wdiff-split-table td.cell-empty { background: rgba(128, 128, 128, 0.06); }
+
+body.vscode-light .wdiff-table tr.add td,
+body.vscode-light .wdiff-split-table td.cell-add { background: #dafbe1; color: #1f2328; }
+body.vscode-light .wdiff-table tr.del td,
+body.vscode-light .wdiff-split-table td.cell-del { background: #ffebe9; color: #1f2328; }
+body.vscode-light .wdiff-table tr.hunk td,
+body.vscode-light .wdiff-split-table tr.hunk td { background: #ddf4ff; color: #0969da; }
+body.vscode-light .wdiff-split-table td.cell-empty { background: #f6f8fa; }
+
+.wdiff-table tr.focus-line td,
+.wdiff-split-table tr.focus-line td {
+  background: rgba(59, 130, 246, 0.24) !important;
+}
+
+.wdiff-table tr.focus-line td:first-child,
+.wdiff-split-table tr.focus-line td:first-child {
+  box-shadow: inset 3px 0 0 var(--rb-accent);
+}
+
+body.vscode-light .wdiff-table tr.focus-line td,
+body.vscode-light .wdiff-split-table tr.focus-line td {
+  background: #dbeafe !important;
+  color: #1f2328;
+}
+
+.wdiff-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 12px;
+  font-size: 11px;
+  color: var(--rb-muted);
+  background: var(--rb-panel);
+  border-top: 1px solid var(--rb-border);
+}
+
+#rb-diff-modal.mod-key .tok:hover {
+  cursor: pointer;
+  color: var(--rb-accent);
+  text-decoration: underline;
+  background: rgba(59, 130, 246, 0.16);
+  border-radius: 2px;
+}
+
+#rb-diff-candidates {
+  position: fixed;
+  z-index: 960;
+  width: min(560px, 90vw);
+  max-height: 320px;
+  overflow: auto;
+  background: var(--rb-panel);
+  color: var(--rb-fg);
+  border: 1px solid var(--rb-accent);
+  border-radius: 6px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  padding: 6px;
+}
+
+#rb-diff-candidates.hidden {
+  display: none;
+}
+
+.wdiff-cand-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--rb-muted);
+  padding: 2px 4px 6px 4px;
+  border-bottom: 1px solid var(--rb-border);
+  margin-bottom: 4px;
+}
+
+.wdiff-cand-item {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: left;
+  padding: 5px 8px;
+  margin-bottom: 3px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--rb-fg);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+}
+
+.wdiff-cand-item:hover {
+  background: var(--rb-panel-2);
+  border-color: var(--rb-accent);
+}
+
+.wdiff-cand-loc {
+  color: var(--rb-blue);
+  font-weight: 600;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.wdiff-cand-file {
+  flex: 0 0 auto;
+}
+
+.wdiff-cand-path {
+  color: var(--rb-muted);
+  font-weight: 400;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wdiff-cand-preview {
+  color: var(--rb-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

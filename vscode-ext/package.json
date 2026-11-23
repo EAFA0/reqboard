@@ -2,7 +2,7 @@
   "name": "reqboard-vscode",
   "displayName": "ReqBoard",
   "description": "三栏需求看板：PRD 锚点覆盖 / 自然拓扑 DAG / 多仓 Diff 归因与 Review 闭环",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "publisher": "eafa0",
   "license": "MIT",
   "engines": {
@@ -101,7 +101,17 @@
         "reqboard.revealSymbolAfterOpen": {
           "type": "boolean",
           "default": true,
-          "description": "调用 focused-git 打开 Diff 后，尽量把光标定位到目标符号所在行。"
+          "description": "调用外部 Diff 编辑器后，尽量把光标定位到目标符号所在行。"
+        },
+        "reqboard.diffViewer": {
+          "type": "string",
+          "enum": [
+            "builtin",
+            "focused-git",
+            "vscode"
+          ],
+          "default": "builtin",
+          "description": "点击右栏文件/符号时的 Diff 查看方式：builtin（默认，内置左右对比/全屏弹窗，复用 VS Code 现成 LSP 支持 Cmd+点击跳定义与 Shift+Cmd+点击查引用，永不丢失 Diff 视图）、focused-git 或 vscode 原生 diff。"
         },
         "reqboard.sessionLinkTemplate": {
           "type": "string",
@@ -128,7 +138,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "test": "npm run compile && node test/basic.test.js && node test/dom.test.js",
-    "package": "npm run compile && vsce package --no-dependencies --allow-missing-repository -o reqboard-vscode-0.3.3.vsix"
+    "package": "npm run compile && vsce package --no-dependencies --allow-missing-repository -o reqboard-vscode-0.4.0.vsix"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

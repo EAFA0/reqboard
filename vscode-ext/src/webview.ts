@@ -5,7 +5,9 @@ import * as vscode from 'vscode';
 export function renderHTML(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   const nonce = randomBytes(16).toString('base64');
   const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'board.css'));
+  const diffCssUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'diff-modal.css'));
   const jsUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'board.js'));
+  const diffJsUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'diff-modal.js'));
   const csp = [
     `default-src 'none'`,
     `img-src ${webview.cspSource} data:`,
@@ -21,6 +23,7 @@ export function renderHTML(webview: vscode.Webview, extensionUri: vscode.Uri): s
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="${cssUri}">
+<link rel="stylesheet" href="${diffCssUri}">
 <title>ReqBoard</title>
 </head>
 <body>
@@ -120,6 +123,7 @@ export function renderHTML(webview: vscode.Webview, extensionUri: vscode.Uri): s
 <div id="popup-layer"></div>
 <div id="toast" class="toast hidden"></div>
 <script nonce="${nonce}" src="${jsUri}"></script>
+<script nonce="${nonce}" src="${diffJsUri}"></script>
 </body>
 </html>`;
 }
